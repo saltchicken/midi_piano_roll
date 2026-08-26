@@ -1,21 +1,22 @@
 use macroquad::prelude::*;
 use midir::{Ignore, MidiInput, MidiInputConnection};
 use std::sync::mpsc;
+use std::time::Instant;
 
 #[derive(Clone, Copy, Debug)]
 enum MidiMessage {
-    NoteOn { pitch: u8, velocity: u8 },
-    NoteOff { pitch: u8 },
+    NoteOn { pitch: u8, velocity: u8, timestamp: f64 },
+    NoteOff { pitch: u8, timestamp: f64 },
 }
 
 struct NoteInfo {
     pitch: u8,
-    velocity: u8, // We will use this for visual intensity
+    velocity: u8, 
     start_time: f64,
     end_time: Option<f64>,
 }
 
-fn setup_midi(tx: mpsc::Sender<MidiMessage>) -> Result<MidiInputConnection<()>, Box<dyn std::error::Error>> {
+fn setup_midi(tx: mpsc::Sender<MidiMessage>, app_start: Instant) -> Result<MidiInputConnection<()>, Box<dyn std::error::Error>> {
     let mut midi_in = MidiInput::new("Piano Roll Input")?;
     midi_in.ignore(Ignore::None);
 
@@ -29,8 +30,6 @@ fn setup_midi(tx: mpsc::Sender<MidiMessage>) -> Result<MidiInputConnection<()>, 
         println!("{}: {}", i, midi_in.port_name(p)?);
     }
     
-    // TIP: On Linux, Port 0 is often "Midi Through". 
-    // We'll grab the last available port instead, which is more likely to be your physical device (like the Arduino Due).
     let in_port = in_ports.last().unwrap();
     println!("Connecting to: {}", midi_in.port_name(in_port)?);
 
@@ -38,6 +37,9 @@ fn setup_midi(tx: mpsc::Sender<MidiMessage>) -> Result<MidiInputConnection<()>, 
         in_port,
         "midir-read-input",
         move |_, message, _| {
+            // Timestamp the event precisely when it arrives in the background thread
+            let timestamp = app_start.elapsed().as_secs_f64();
+            
             if message.len() >= 3 {
                 let status = message[0] & 0xF0;
                 let pitch = message[1];
@@ -45,12 +47,12 @@ fn setup_midi(tx: mpsc::Sender<MidiMessage>) -> Result<MidiInputConnection<()>, 
 
                 if status == 0x90 { // Note On
                     if velocity > 0 {
-                        let _ = tx.send(MidiMessage::NoteOn { pitch, velocity });
+                        let _ = tx.send(MidiMessage::NoteOn { pitch, velocity, timestamp });
                     } else {
-                        let _ = tx.send(MidiMessage::NoteOff { pitch });
+                        let _ = tx.send(MidiMessage::NoteOff { pitch, timestamp });
                     }
                 } else if status == 0x80 { // Note Off
-                    let _ = tx.send(MidiMessage::NoteOff { pitch });
+                    let _ = tx.send(MidiMessage::NoteOff { pitch, timestamp });
                 }
             }
         },
@@ -83,9 +85,11 @@ fn get_key_pos(pitch: u8) -> (bool, f32) {
 
 #[macroquad::main("MIDI Piano Roll")]
 async fn main() {
+    // Standardize timekeeping using std::time::Instant
+    let app_start = Instant::now();
     let (tx, rx) = mpsc::channel();
     
-    let _midi_conn = match setup_midi(tx) {
+    let _midi_conn = match setup_midi(tx, app_start) {
         Ok(conn) => Some(conn),
         Err(e) => {
             eprintln!("Failed to setup MIDI: {}", e);
@@ -95,28 +99,29 @@ async fn main() {
 
     let mut notes: Vec<NoteInfo> = Vec::new();
     let mut active_pitches = [false; 128];
-    let start_time_app = get_time();
     let note_speed = 300.0;
 
     loop {
         clear_background(Color::new(0.1, 0.1, 0.12, 1.0));
-        let current_time = get_time() - start_time_app;
+        
+        // Sync render time to the shared clock
+        let current_time = app_start.elapsed().as_secs_f64();
 
         while let Ok(msg) = rx.try_recv() {
             match msg {
-                MidiMessage::NoteOn { pitch, velocity } => {
+                MidiMessage::NoteOn { pitch, velocity, timestamp } => {
                     notes.push(NoteInfo {
                         pitch,
                         velocity,
-                        start_time: current_time,
+                        start_time: timestamp, // Use thread timestamp
                         end_time: None,
                     });
                     active_pitches[pitch as usize] = true;
                 }
-                MidiMessage::NoteOff { pitch } => {
+                MidiMessage::NoteOff { pitch, timestamp } => {
                     active_pitches[pitch as usize] = false;
                     if let Some(note) = notes.iter_mut().rev().find(|n| n.pitch == pitch && n.end_time.is_none()) {
-                        note.end_time = Some(current_time);
+                        note.end_time = Some(timestamp); // Use thread timestamp
                     }
                 }
             }
@@ -149,7 +154,6 @@ async fn main() {
                 continue;
             }
 
-            // Map MIDI velocity (0-127) to an alpha value (0.3 to 1.0)
             let velocity_alpha = (note.velocity as f32 / 127.0).clamp(0.3, 1.0);
 
             let color = if note.end_time.is_none() {
