@@ -7,7 +7,7 @@ use std::time::Instant;
 enum MidiMessage {
     NoteOn { pitch: u8, velocity: u8, timestamp: f64 },
     NoteOff { pitch: u8, timestamp: f64 },
-    ControlChange { controller: u8, value: u8, timestamp: f64 },
+    ControlChange { channel: u8, controller: u8, value: u8 }, // Removed timestamp here
 }
 
 struct NoteInfo {
@@ -43,6 +43,9 @@ fn setup_midi(tx: mpsc::Sender<MidiMessage>, app_start: Instant) -> Result<MidiI
             if message.len() >= 3 {
                 // Mask out the channel to get just the message type
                 let status = message[0] & 0xF0;
+                // Extract the channel (lower 4 bits)
+                let channel = message[0] & 0x0F;
+                
                 let data1 = message[1];
                 let data2 = message[2];
 
@@ -55,7 +58,8 @@ fn setup_midi(tx: mpsc::Sender<MidiMessage>, app_start: Instant) -> Result<MidiI
                 } else if status == 0x80 { // Note Off
                     let _ = tx.send(MidiMessage::NoteOff { pitch: data1, timestamp });
                 } else if status == 0xB0 { // Control Change (CC)
-                    let _ = tx.send(MidiMessage::ControlChange { controller: data1, value: data2, timestamp });
+                    // Removed timestamp here
+                    let _ = tx.send(MidiMessage::ControlChange { channel, controller: data1, value: data2 });
                 }
             }
         },
@@ -101,8 +105,9 @@ async fn main() {
 
     let mut notes: Vec<NoteInfo> = Vec::new();
     let mut active_pitches = [false; 128];
-    // Track CC values. Using Option to only display CCs we've actually received.
-    let mut cc_values: [Option<u8>; 128] = [None; 128]; 
+    
+    // Track CC values for 16 channels, each with 128 controllers
+    let mut cc_values: [[Option<u8>; 128]; 16] = [[None; 128]; 16]; 
     let note_speed = 300.0;
 
     loop {
@@ -127,8 +132,9 @@ async fn main() {
                         note.end_time = Some(timestamp);
                     }
                 }
-                MidiMessage::ControlChange { controller, value, .. } => {
-                    cc_values[controller as usize] = Some(value);
+                // Also removed the `..` discard since we no longer have extra fields
+                MidiMessage::ControlChange { channel, controller, value } => {
+                    cc_values[channel as usize][controller as usize] = Some(value);
                 }
             }
         }
@@ -194,27 +200,31 @@ async fn main() {
 
         // Render CC Monitor HUD in top left
         let mut text_y = 30.0;
-        let ccs_active = cc_values.iter().any(|v| v.is_some());
+        let ccs_active = cc_values.iter().any(|ch_array| ch_array.iter().any(|v| v.is_some()));
         
         if ccs_active {
             draw_text("MIDI CC Monitor", 15.0, text_y, 20.0, WHITE);
             text_y += 25.0;
             
-            for (controller, value_opt) in cc_values.iter().enumerate() {
-                if let Some(value) = value_opt {
-                    // Draw textual value
-                    draw_text(&format!("CC {:03}: {:03}", controller, value), 15.0, text_y, 16.0, LIGHTGRAY);
-                    
-                    // Draw small bar graph indicating the level (0-127)
-                    let bar_width = 100.0;
-                    let fill_width = (*value as f32 / 127.0) * bar_width;
-                    
-                    // Background bar
-                    draw_rectangle(90.0, text_y - 12.0, bar_width, 10.0, Color::new(0.2, 0.2, 0.2, 0.8));
-                    // Foreground (fill) bar
-                    draw_rectangle(90.0, text_y - 12.0, fill_width, 10.0, Color::new(0.0, 0.8, 0.5, 0.8));
-                    
-                    text_y += 20.0;
+            for ch in 0..16 {
+                for (controller, value_opt) in cc_values[ch].iter().enumerate() {
+                    if let Some(value) = value_opt {
+                        // Channel numbering conceptually ranges 1-16 to the user (ch + 1)
+                        let text = format!("CH {:02} | CC {:03}: {:03}", ch + 1, controller, value);
+                        draw_text(&text, 15.0, text_y, 16.0, LIGHTGRAY);
+                        
+                        // Draw small bar graph indicating the level (0-127)
+                        let bar_width = 100.0;
+                        let fill_width = (*value as f32 / 127.0) * bar_width;
+                        let bar_x = 160.0; // Pushed right to account for the wider text layout
+                        
+                        // Background bar
+                        draw_rectangle(bar_x, text_y - 12.0, bar_width, 10.0, Color::new(0.2, 0.2, 0.2, 0.8));
+                        // Foreground (fill) bar
+                        draw_rectangle(bar_x, text_y - 12.0, fill_width, 10.0, Color::new(0.0, 0.8, 0.5, 0.8));
+                        
+                        text_y += 20.0;
+                    }
                 }
             }
         }
