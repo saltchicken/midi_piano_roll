@@ -32,7 +32,11 @@ fn setup_midi(tx: mpsc::Sender<MidiMessage>, app_start: Instant) -> Result<MidiI
         println!("{}: {}", i, midi_in.port_name(p)?);
     }
     
-    let in_port = in_ports.last().unwrap();
+    // Search for "Midi Through", fallback to the first port if it isn't found
+    let in_port = in_ports.iter().find(|p| {
+        midi_in.port_name(p).unwrap_or_default().contains("Midi Through")
+    }).unwrap_or_else(|| in_ports.first().unwrap());
+
     println!("Connecting to: {}", midi_in.port_name(in_port)?);
 
     let conn = midi_in.connect(
@@ -101,6 +105,20 @@ fn get_channel_color(channel: u8, alpha: f32) -> Color {
     Color::new(r, g, b, alpha)
 }
 
+// Groups standard GM drum pitches into 8 visual lanes
+fn get_drum_lane(pitch: u8) -> Option<(&'static str, usize)> {
+    match pitch {
+        35 | 36 => Some(("KICK", 0)),
+        38 | 40 => Some(("SNR", 1)),
+        42 | 44 => Some(("CHH", 2)), // Closed Hi-hat
+        46 => Some(("OHH", 3)),      // Open Hi-hat
+        41 | 43 | 45 | 47 | 48 | 50 => Some(("TOM", 4)),
+        49 | 52 | 55 | 57 => Some(("CRSH", 5)),
+        51 | 53 | 59 => Some(("RIDE", 6)),
+        _ => Some(("PERC", 7)), // Catch-all for other percussions
+    }
+}
+
 #[macroquad::main("MIDI Piano Roll")]
 async fn main() {
     let app_start = Instant::now();
@@ -154,35 +172,57 @@ async fn main() {
         let screen_h = screen_height();
         let key_height = 80.0;
         
+        // Reserve up to 300 pixels on the right for drums
+        let drum_highway_w = 300.0_f32.min(screen_w * 0.3);
+        let piano_w = screen_w - drum_highway_w;
+        let drum_x_start = piano_w;
+        
         let num_white_keys = 52.0;
-        let white_key_width = screen_w / num_white_keys;
+        // Scale white keys based on piano_w, not screen_w
+        let white_key_width = piano_w / num_white_keys; 
         let black_key_width = white_key_width * 0.6;
 
         // Render falling notes
         for note in &notes {
-            let (is_black, white_idx) = get_key_pos(note.pitch);
-            let center_x = white_idx * white_key_width + (white_key_width / 2.0);
-            
-            let note_width = if is_black { black_key_width } else { white_key_width - 2.0 };
-            let x = center_x - (note_width / 2.0);
+            if note.channel == 9 {
+                // DRUM RENDERING
+                if let Some((_, lane)) = get_drum_lane(note.pitch) {
+                    let lane_w = drum_highway_w / 8.0;
+                    let center_x = drum_x_start + (lane as f32 * lane_w) + (lane_w / 2.0);
+                    
+                    // Drums are instantaneous; calculate Y based solely on start_time
+                    let y = screen_h - key_height - ((current_time - note.start_time) * note_speed as f64) as f32;
+                    
+                    if y > screen_h || y < -50.0 { continue; }
+                    
+                    let velocity_alpha = (note.velocity as f32 / 127.0).clamp(0.4, 1.0);
+                    let color = get_channel_color(note.channel, velocity_alpha);
+                    
+                    draw_circle(center_x, y, lane_w * 0.3, color);
+                }
+            } else {
+                // STANDARD PIANO RENDERING
+                let (is_black, white_idx) = get_key_pos(note.pitch);
+                let center_x = white_idx * white_key_width + (white_key_width / 2.0);
+                
+                let note_width = if is_black { black_key_width } else { white_key_width - 2.0 };
+                let x = center_x - (note_width / 2.0);
 
-            let end_t = note.end_time.unwrap_or(current_time);
-            
-            let y_bottom = screen_h - key_height - ((current_time - end_t) * note_speed as f64) as f32;
-            let y_top = screen_h - key_height - ((current_time - note.start_time) * note_speed as f64) as f32;
+                let end_t = note.end_time.unwrap_or(current_time);
+                let y_bottom = screen_h - key_height - ((current_time - end_t) * note_speed as f64) as f32;
+                let y_top = screen_h - key_height - ((current_time - note.start_time) * note_speed as f64) as f32;
 
-            let y = y_top;
-            let height = (y_bottom - y_top).max(3.0);
+                let y = y_top;
+                let height = (y_bottom - y_top).max(3.0);
 
-            if y > screen_h || y + height < 0.0 {
-                continue;
+                if y > screen_h || y + height < 0.0 { continue; }
+
+                let velocity_alpha = (note.velocity as f32 / 127.0).clamp(0.3, 1.0);
+                let base_alpha = if note.end_time.is_none() { 0.9 } else { 0.5 };
+                let color = get_channel_color(note.channel, base_alpha * velocity_alpha);
+
+                draw_rectangle(x, y, note_width, height, color);
             }
-
-            let velocity_alpha = (note.velocity as f32 / 127.0).clamp(0.3, 1.0);
-            let base_alpha = if note.end_time.is_none() { 0.9 } else { 0.5 };
-            let color = get_channel_color(note.channel, base_alpha * velocity_alpha);
-
-            draw_rectangle(x, y, note_width, height, color);
         }
 
         // Render piano keys (white keys)
@@ -191,6 +231,9 @@ async fn main() {
             if !is_black {
                 let mut active_channel = None;
                 for ch in 0..16 {
+                    // Ignore drum channel for the piano roll keys
+                    if ch == 9 { continue; }
+                    
                     if active_pitches[ch][i as usize] {
                         active_channel = Some(ch as u8);
                         break;
@@ -214,6 +257,9 @@ async fn main() {
             if is_black {
                 let mut active_channel = None;
                 for ch in 0..16 {
+                    // Ignore drum channel for the piano roll keys
+                    if ch == 9 { continue; }
+                    
                     if active_pitches[ch][i as usize] {
                         active_channel = Some(ch as u8);
                         break;
@@ -229,6 +275,37 @@ async fn main() {
                 };
                 draw_rectangle(x, screen_h - key_height, black_key_width, key_height * 0.65, color);
             }
+        }
+
+        // Render Drum Pads
+        let lane_w = drum_highway_w / 8.0;
+        for lane in 0..8 {
+            let x = drum_x_start + (lane as f32 * lane_w);
+            
+            // Check if any pitch mapped to this lane is currently active
+            let is_active = active_pitches[9].iter().enumerate()
+                .any(|(p, &active)| active && get_drum_lane(p as u8).map(|(_, l)| l) == Some(lane));
+                
+            let color = if is_active { 
+                get_channel_color(9, 1.0) 
+            } else { 
+                Color::new(0.2, 0.2, 0.2, 1.0) 
+            };
+            
+            // Draw Pad
+            draw_rectangle(x, screen_h - key_height, lane_w - 2.0, key_height, color);
+            draw_rectangle_lines(x, screen_h - key_height, lane_w - 2.0, key_height, 1.0, GRAY);
+            
+            // Draw Label
+            let label = match lane {
+                0 => "KICK", 1 => "SNR", 2 => "CHH", 3 => "OHH", 
+                4 => "TOM", 5 => "CRSH", 6 => "RIDE", _ => "PERC"
+            };
+            
+            // Center the text roughly in the pad
+            let text_size = measure_text(label, None, 16u16, 1.0);
+            let text_x = x + (lane_w / 2.0) - (text_size.width / 2.0);
+            draw_text(label, text_x, screen_h - (key_height / 2.0) + (text_size.height / 2.0), 16.0, WHITE);
         }
 
         // Render CC Monitor HUD in top left
