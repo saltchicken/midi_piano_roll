@@ -138,8 +138,25 @@ async fn main() {
     // Track CC values for 16 channels, each with 128 controllers
     let mut cc_values: [[Option<u8>; 128]; 16] = [[None; 128]; 16]; 
     let note_speed = 300.0;
+    
+    // State for toggling UI elements
+    let mut show_drums = true;
+    let mut show_cc = true;
+    let mut show_hints = true;
 
     loop {
+        // Toggle states
+        if is_key_pressed(KeyCode::D) {
+            show_drums = !show_drums;
+        }
+        if is_key_pressed(KeyCode::C) {
+            show_cc = !show_cc;
+        }
+        // Slash key typically represents both '/' and '?' on standard US keyboards
+        if is_key_pressed(KeyCode::Slash) {
+            show_hints = !show_hints;
+        }
+
         clear_background(Color::new(0.1, 0.1, 0.12, 1.0));
         
         let current_time = app_start.elapsed().as_secs_f64();
@@ -172,10 +189,12 @@ async fn main() {
         let screen_h = screen_height();
         let key_height = 80.0;
         
-        // Reserve up to 300 pixels on the right for drums
-        let drum_highway_w = 300.0_f32.min(screen_w * 0.3);
+        // Reserve up to 300 pixels on the left for drums, conditionally
+        let drum_highway_w = if show_drums { 300.0_f32.min(screen_w * 0.3) } else { 0.0 };
         let piano_w = screen_w - drum_highway_w;
-        let drum_x_start = piano_w;
+        
+        let drum_x_start = 0.0;
+        let piano_x_start = drum_highway_w;
         
         let num_white_keys = 52.0;
         // Scale white keys based on piano_w, not screen_w
@@ -184,8 +203,8 @@ async fn main() {
 
         // Render falling notes
         for note in &notes {
-            if note.channel == 9 {
-                // DRUM RENDERING
+            if show_drums && note.channel == 9 {
+                // DRUM RENDERING (On the Left)
                 if let Some((_, lane)) = get_drum_lane(note.pitch) {
                     let lane_w = drum_highway_w / 8.0;
                     let center_x = drum_x_start + (lane as f32 * lane_w) + (lane_w / 2.0);
@@ -201,9 +220,9 @@ async fn main() {
                     draw_circle(center_x, y, lane_w * 0.3, color);
                 }
             } else {
-                // STANDARD PIANO RENDERING
+                // STANDARD PIANO RENDERING (Offset by drum width)
                 let (is_black, white_idx) = get_key_pos(note.pitch);
-                let center_x = white_idx * white_key_width + (white_key_width / 2.0);
+                let center_x = piano_x_start + white_idx * white_key_width + (white_key_width / 2.0);
                 
                 let note_width = if is_black { black_key_width } else { white_key_width - 2.0 };
                 let x = center_x - (note_width / 2.0);
@@ -231,8 +250,8 @@ async fn main() {
             if !is_black {
                 let mut active_channel = None;
                 for ch in 0..16 {
-                    // Ignore drum channel for the piano roll keys
-                    if ch == 9 { continue; }
+                    // Ignore drum channel for the piano roll keys if special view is active
+                    if show_drums && ch == 9 { continue; }
                     
                     if active_pitches[ch][i as usize] {
                         active_channel = Some(ch as u8);
@@ -240,7 +259,7 @@ async fn main() {
                     }
                 }
 
-                let x = white_idx * white_key_width;
+                let x = piano_x_start + white_idx * white_key_width;
                 let color = if let Some(ch) = active_channel { 
                     get_channel_color(ch, 1.0) 
                 } else { 
@@ -257,8 +276,8 @@ async fn main() {
             if is_black {
                 let mut active_channel = None;
                 for ch in 0..16 {
-                    // Ignore drum channel for the piano roll keys
-                    if ch == 9 { continue; }
+                    // Ignore drum channel for the piano roll keys if special view is active
+                    if show_drums && ch == 9 { continue; }
                     
                     if active_pitches[ch][i as usize] {
                         active_channel = Some(ch as u8);
@@ -266,7 +285,7 @@ async fn main() {
                     }
                 }
 
-                let center_x = white_idx * white_key_width + (white_key_width / 2.0);
+                let center_x = piano_x_start + white_idx * white_key_width + (white_key_width / 2.0);
                 let x = center_x - (black_key_width / 2.0);
                 let color = if let Some(ch) = active_channel { 
                     get_channel_color(ch, 1.0) 
@@ -278,65 +297,92 @@ async fn main() {
         }
 
         // Render Drum Pads
-        let lane_w = drum_highway_w / 8.0;
-        for lane in 0..8 {
-            let x = drum_x_start + (lane as f32 * lane_w);
-            
-            // Check if any pitch mapped to this lane is currently active
-            let is_active = active_pitches[9].iter().enumerate()
-                .any(|(p, &active)| active && get_drum_lane(p as u8).map(|(_, l)| l) == Some(lane));
+        if show_drums {
+            let lane_w = drum_highway_w / 8.0;
+            for lane in 0..8 {
+                let x = drum_x_start + (lane as f32 * lane_w);
                 
-            let color = if is_active { 
-                get_channel_color(9, 1.0) 
-            } else { 
-                Color::new(0.2, 0.2, 0.2, 1.0) 
-            };
-            
-            // Draw Pad
-            draw_rectangle(x, screen_h - key_height, lane_w - 2.0, key_height, color);
-            draw_rectangle_lines(x, screen_h - key_height, lane_w - 2.0, key_height, 1.0, GRAY);
-            
-            // Draw Label
-            let label = match lane {
-                0 => "KICK", 1 => "SNR", 2 => "CHH", 3 => "OHH", 
-                4 => "TOM", 5 => "CRSH", 6 => "RIDE", _ => "PERC"
-            };
-            
-            // Center the text roughly in the pad
-            let text_size = measure_text(label, None, 16u16, 1.0);
-            let text_x = x + (lane_w / 2.0) - (text_size.width / 2.0);
-            draw_text(label, text_x, screen_h - (key_height / 2.0) + (text_size.height / 2.0), 16.0, WHITE);
+                // Check if any pitch mapped to this lane is currently active
+                let is_active = active_pitches[9].iter().enumerate()
+                    .any(|(p, &active)| active && get_drum_lane(p as u8).map(|(_, l)| l) == Some(lane));
+                    
+                let color = if is_active { 
+                    get_channel_color(9, 1.0) 
+                } else { 
+                    Color::new(0.2, 0.2, 0.2, 1.0) 
+                };
+                
+                // Draw Pad
+                draw_rectangle(x, screen_h - key_height, lane_w - 2.0, key_height, color);
+                draw_rectangle_lines(x, screen_h - key_height, lane_w - 2.0, key_height, 1.0, GRAY);
+                
+                // Draw Label
+                let label = match lane {
+                    0 => "KICK", 1 => "SNR", 2 => "CHH", 3 => "OHH", 
+                    4 => "TOM", 5 => "CRSH", 6 => "RIDE", _ => "PERC"
+                };
+                
+                // Center the text roughly in the pad
+                let text_size = measure_text(label, None, 16u16, 1.0);
+                let text_x = x + (lane_w / 2.0) - (text_size.width / 2.0);
+                draw_text(label, text_x, screen_h - (key_height / 2.0) + (text_size.height / 2.0), 16.0, WHITE);
+            }
         }
 
-        // Render CC Monitor HUD in top left
-        let mut text_y = 30.0;
+        // Render CC Monitor HUD in top left (offset by drum highway if open)
+        let mut cc_text_y = 30.0;
+        let cc_text_x = piano_x_start + 15.0; // Keeps the text anchored to the top-left of the piano
+        
         let ccs_active = cc_values.iter().any(|ch_array| ch_array.iter().any(|v| v.is_some()));
         
-        if ccs_active {
-            draw_text("MIDI CC Monitor", 15.0, text_y, 20.0, WHITE);
-            text_y += 25.0;
+        if show_cc && ccs_active {
+            draw_text("MIDI CC Monitor", cc_text_x, cc_text_y, 20.0, WHITE);
+            cc_text_y += 25.0;
             
             for ch in 0..16 {
                 for (controller, value_opt) in cc_values[ch].iter().enumerate() {
                     if let Some(value) = value_opt {
                         // Channel numbering conceptually ranges 1-16 to the user (ch + 1)
                         let text = format!("CH {:02} | CC {:03}: {:03}", ch + 1, controller, value);
-                        draw_text(&text, 15.0, text_y, 16.0, LIGHTGRAY);
+                        draw_text(&text, cc_text_x, cc_text_y, 16.0, LIGHTGRAY);
                         
                         // Draw small bar graph indicating the level (0-127)
                         let bar_width = 100.0;
                         let fill_width = (*value as f32 / 127.0) * bar_width;
-                        let bar_x = 160.0; // Pushed right to account for the wider text layout
+                        let bar_x = cc_text_x + 145.0; // Pushed right relative to the text block
                         
                         // Background bar
-                        draw_rectangle(bar_x, text_y - 12.0, bar_width, 10.0, Color::new(0.2, 0.2, 0.2, 0.8));
+                        draw_rectangle(bar_x, cc_text_y - 12.0, bar_width, 10.0, Color::new(0.2, 0.2, 0.2, 0.8));
                         // Foreground (fill) bar
-                        draw_rectangle(bar_x, text_y - 12.0, fill_width, 10.0, Color::new(0.0, 0.8, 0.5, 0.8));
+                        draw_rectangle(bar_x, cc_text_y - 12.0, fill_width, 10.0, Color::new(0.0, 0.8, 0.5, 0.8));
                         
-                        text_y += 20.0;
+                        cc_text_y += 20.0;
                     }
                 }
             }
+        }
+
+        // Render Hotkey Hints in top right
+        if show_hints {
+            let hint_toggle = "[?] Toggle Hints";
+            let hint_drums = format!("[D] Drums: {}", if show_drums { "ON" } else { "OFF" });
+            let hint_cc = format!("[C] CC Monitor: {}", if show_cc { "ON" } else { "OFF" });
+            
+            // Measure the widest text line so we can right-align it properly
+            let m1 = measure_text(hint_toggle, None, 20, 1.0);
+            let m2 = measure_text(&hint_drums, None, 20, 1.0);
+            let m3 = measure_text(&hint_cc, None, 20, 1.0);
+            
+            let max_w = m1.width.max(m2.width).max(m3.width);
+            
+            let hints_x = screen_w - max_w - 15.0;
+            let mut hints_y = 30.0;
+            
+            draw_text(hint_toggle, hints_x, hints_y, 20.0, WHITE);
+            hints_y += 25.0;
+            draw_text(&hint_drums, hints_x, hints_y, 20.0, WHITE);
+            hints_y += 25.0;
+            draw_text(&hint_cc, hints_x, hints_y, 20.0, WHITE);
         }
 
         notes.retain(|n| {
