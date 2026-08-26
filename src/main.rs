@@ -5,12 +5,13 @@ use std::time::Instant;
 
 #[derive(Clone, Copy, Debug)]
 enum MidiMessage {
-    NoteOn { pitch: u8, velocity: u8, timestamp: f64 },
-    NoteOff { pitch: u8, timestamp: f64 },
-    ControlChange { channel: u8, controller: u8, value: u8 }, // Removed timestamp here
+    NoteOn { channel: u8, pitch: u8, velocity: u8, timestamp: f64 },
+    NoteOff { channel: u8, pitch: u8, timestamp: f64 },
+    ControlChange { channel: u8, controller: u8, value: u8 },
 }
 
 struct NoteInfo {
+    channel: u8,
     pitch: u8,
     velocity: u8, 
     start_time: f64,
@@ -51,14 +52,13 @@ fn setup_midi(tx: mpsc::Sender<MidiMessage>, app_start: Instant) -> Result<MidiI
 
                 if status == 0x90 { // Note On
                     if data2 > 0 {
-                        let _ = tx.send(MidiMessage::NoteOn { pitch: data1, velocity: data2, timestamp });
+                        let _ = tx.send(MidiMessage::NoteOn { channel, pitch: data1, velocity: data2, timestamp });
                     } else {
-                        let _ = tx.send(MidiMessage::NoteOff { pitch: data1, timestamp });
+                        let _ = tx.send(MidiMessage::NoteOff { channel, pitch: data1, timestamp });
                     }
                 } else if status == 0x80 { // Note Off
-                    let _ = tx.send(MidiMessage::NoteOff { pitch: data1, timestamp });
+                    let _ = tx.send(MidiMessage::NoteOff { channel, pitch: data1, timestamp });
                 } else if status == 0xB0 { // Control Change (CC)
-                    // Removed timestamp here
                     let _ = tx.send(MidiMessage::ControlChange { channel, controller: data1, value: data2 });
                 }
             }
@@ -90,6 +90,17 @@ fn get_key_pos(pitch: u8) -> (bool, f32) {
     (is_black, adjusted_idx)
 }
 
+fn get_channel_color(channel: u8, alpha: f32) -> Color {
+    let colors = [
+        (1.0, 0.3, 0.3), (0.3, 1.0, 0.3), (0.3, 0.5, 1.0), (1.0, 1.0, 0.3), // CH 1-4
+        (1.0, 0.6, 0.2), (0.8, 0.3, 0.8), (0.3, 1.0, 1.0), (1.0, 0.4, 0.7), // CH 5-8
+        (0.6, 0.8, 0.2), (0.4, 0.8, 1.0), (0.9, 0.2, 0.5), (0.2, 0.8, 0.6), // CH 9-12
+        (0.7, 0.4, 0.0), (0.6, 0.6, 0.6), (0.8, 0.8, 0.9), (1.0, 0.8, 0.6), // CH 13-16
+    ];
+    let (r, g, b) = colors[(channel as usize) % 16];
+    Color::new(r, g, b, alpha)
+}
+
 #[macroquad::main("MIDI Piano Roll")]
 async fn main() {
     let app_start = Instant::now();
@@ -104,7 +115,7 @@ async fn main() {
     };
 
     let mut notes: Vec<NoteInfo> = Vec::new();
-    let mut active_pitches = [false; 128];
+    let mut active_pitches = [[false; 128]; 16];
     
     // Track CC values for 16 channels, each with 128 controllers
     let mut cc_values: [[Option<u8>; 128]; 16] = [[None; 128]; 16]; 
@@ -117,22 +128,22 @@ async fn main() {
 
         while let Ok(msg) = rx.try_recv() {
             match msg {
-                MidiMessage::NoteOn { pitch, velocity, timestamp } => {
+                MidiMessage::NoteOn { channel, pitch, velocity, timestamp } => {
                     notes.push(NoteInfo {
+                        channel,
                         pitch,
                         velocity,
                         start_time: timestamp,
                         end_time: None,
                     });
-                    active_pitches[pitch as usize] = true;
+                    active_pitches[channel as usize][pitch as usize] = true;
                 }
-                MidiMessage::NoteOff { pitch, timestamp } => {
-                    active_pitches[pitch as usize] = false;
-                    if let Some(note) = notes.iter_mut().rev().find(|n| n.pitch == pitch && n.end_time.is_none()) {
+                MidiMessage::NoteOff { channel, pitch, timestamp } => {
+                    active_pitches[channel as usize][pitch as usize] = false;
+                    if let Some(note) = notes.iter_mut().rev().find(|n| n.pitch == pitch && n.channel == channel && n.end_time.is_none()) {
                         note.end_time = Some(timestamp);
                     }
                 }
-                // Also removed the `..` discard since we no longer have extra fields
                 MidiMessage::ControlChange { channel, controller, value } => {
                     cc_values[channel as usize][controller as usize] = Some(value);
                 }
@@ -168,32 +179,54 @@ async fn main() {
             }
 
             let velocity_alpha = (note.velocity as f32 / 127.0).clamp(0.3, 1.0);
-
-            let color = if note.end_time.is_none() {
-                Color::new(0.0, 0.8, 1.0, 0.9 * velocity_alpha)
-            } else {
-                Color::new(0.0, 0.5, 0.8, 0.7 * velocity_alpha)
-            };
+            let base_alpha = if note.end_time.is_none() { 0.9 } else { 0.5 };
+            let color = get_channel_color(note.channel, base_alpha * velocity_alpha);
 
             draw_rectangle(x, y, note_width, height, color);
         }
 
-        // Render piano keys
+        // Render piano keys (white keys)
         for i in 21..=108 {
             let (is_black, white_idx) = get_key_pos(i);
             if !is_black {
+                let mut active_channel = None;
+                for ch in 0..16 {
+                    if active_pitches[ch][i as usize] {
+                        active_channel = Some(ch as u8);
+                        break;
+                    }
+                }
+
                 let x = white_idx * white_key_width;
-                let color = if active_pitches[i as usize] { Color::new(0.7, 0.9, 1.0, 1.0) } else { WHITE };
+                let color = if let Some(ch) = active_channel { 
+                    get_channel_color(ch, 1.0) 
+                } else { 
+                    WHITE 
+                };
                 draw_rectangle(x, screen_h - key_height, white_key_width, key_height, color);
                 draw_rectangle_lines(x, screen_h - key_height, white_key_width, key_height, 1.0, GRAY);
             }
         }
+        
+        // Render piano keys (black keys)
         for i in 21..=108 {
             let (is_black, white_idx) = get_key_pos(i);
             if is_black {
+                let mut active_channel = None;
+                for ch in 0..16 {
+                    if active_pitches[ch][i as usize] {
+                        active_channel = Some(ch as u8);
+                        break;
+                    }
+                }
+
                 let center_x = white_idx * white_key_width + (white_key_width / 2.0);
                 let x = center_x - (black_key_width / 2.0);
-                let color = if active_pitches[i as usize] { Color::new(0.3, 0.5, 0.7, 1.0) } else { BLACK };
+                let color = if let Some(ch) = active_channel { 
+                    get_channel_color(ch, 1.0) 
+                } else { 
+                    BLACK 
+                };
                 draw_rectangle(x, screen_h - key_height, black_key_width, key_height * 0.65, color);
             }
         }
