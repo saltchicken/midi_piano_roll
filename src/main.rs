@@ -7,6 +7,7 @@ use std::time::Instant;
 enum MidiMessage {
     NoteOn { pitch: u8, velocity: u8, timestamp: f64 },
     NoteOff { pitch: u8, timestamp: f64 },
+    ControlChange { controller: u8, value: u8, timestamp: f64 },
 }
 
 struct NoteInfo {
@@ -37,22 +38,24 @@ fn setup_midi(tx: mpsc::Sender<MidiMessage>, app_start: Instant) -> Result<MidiI
         in_port,
         "midir-read-input",
         move |_, message, _| {
-            // Timestamp the event precisely when it arrives in the background thread
             let timestamp = app_start.elapsed().as_secs_f64();
             
             if message.len() >= 3 {
+                // Mask out the channel to get just the message type
                 let status = message[0] & 0xF0;
-                let pitch = message[1];
-                let velocity = message[2];
+                let data1 = message[1];
+                let data2 = message[2];
 
                 if status == 0x90 { // Note On
-                    if velocity > 0 {
-                        let _ = tx.send(MidiMessage::NoteOn { pitch, velocity, timestamp });
+                    if data2 > 0 {
+                        let _ = tx.send(MidiMessage::NoteOn { pitch: data1, velocity: data2, timestamp });
                     } else {
-                        let _ = tx.send(MidiMessage::NoteOff { pitch, timestamp });
+                        let _ = tx.send(MidiMessage::NoteOff { pitch: data1, timestamp });
                     }
                 } else if status == 0x80 { // Note Off
-                    let _ = tx.send(MidiMessage::NoteOff { pitch, timestamp });
+                    let _ = tx.send(MidiMessage::NoteOff { pitch: data1, timestamp });
+                } else if status == 0xB0 { // Control Change (CC)
+                    let _ = tx.send(MidiMessage::ControlChange { controller: data1, value: data2, timestamp });
                 }
             }
         },
@@ -85,7 +88,6 @@ fn get_key_pos(pitch: u8) -> (bool, f32) {
 
 #[macroquad::main("MIDI Piano Roll")]
 async fn main() {
-    // Standardize timekeeping using std::time::Instant
     let app_start = Instant::now();
     let (tx, rx) = mpsc::channel();
     
@@ -99,12 +101,13 @@ async fn main() {
 
     let mut notes: Vec<NoteInfo> = Vec::new();
     let mut active_pitches = [false; 128];
+    // Track CC values. Using Option to only display CCs we've actually received.
+    let mut cc_values: [Option<u8>; 128] = [None; 128]; 
     let note_speed = 300.0;
 
     loop {
         clear_background(Color::new(0.1, 0.1, 0.12, 1.0));
         
-        // Sync render time to the shared clock
         let current_time = app_start.elapsed().as_secs_f64();
 
         while let Ok(msg) = rx.try_recv() {
@@ -113,7 +116,7 @@ async fn main() {
                     notes.push(NoteInfo {
                         pitch,
                         velocity,
-                        start_time: timestamp, // Use thread timestamp
+                        start_time: timestamp,
                         end_time: None,
                     });
                     active_pitches[pitch as usize] = true;
@@ -121,8 +124,11 @@ async fn main() {
                 MidiMessage::NoteOff { pitch, timestamp } => {
                     active_pitches[pitch as usize] = false;
                     if let Some(note) = notes.iter_mut().rev().find(|n| n.pitch == pitch && n.end_time.is_none()) {
-                        note.end_time = Some(timestamp); // Use thread timestamp
+                        note.end_time = Some(timestamp);
                     }
+                }
+                MidiMessage::ControlChange { controller, value, .. } => {
+                    cc_values[controller as usize] = Some(value);
                 }
             }
         }
@@ -135,6 +141,7 @@ async fn main() {
         let white_key_width = screen_w / num_white_keys;
         let black_key_width = white_key_width * 0.6;
 
+        // Render falling notes
         for note in &notes {
             let (is_black, white_idx) = get_key_pos(note.pitch);
             let center_x = white_idx * white_key_width + (white_key_width / 2.0);
@@ -165,6 +172,7 @@ async fn main() {
             draw_rectangle(x, y, note_width, height, color);
         }
 
+        // Render piano keys
         for i in 21..=108 {
             let (is_black, white_idx) = get_key_pos(i);
             if !is_black {
@@ -174,7 +182,6 @@ async fn main() {
                 draw_rectangle_lines(x, screen_h - key_height, white_key_width, key_height, 1.0, GRAY);
             }
         }
-
         for i in 21..=108 {
             let (is_black, white_idx) = get_key_pos(i);
             if is_black {
@@ -182,6 +189,33 @@ async fn main() {
                 let x = center_x - (black_key_width / 2.0);
                 let color = if active_pitches[i as usize] { Color::new(0.3, 0.5, 0.7, 1.0) } else { BLACK };
                 draw_rectangle(x, screen_h - key_height, black_key_width, key_height * 0.65, color);
+            }
+        }
+
+        // Render CC Monitor HUD in top left
+        let mut text_y = 30.0;
+        let ccs_active = cc_values.iter().any(|v| v.is_some());
+        
+        if ccs_active {
+            draw_text("MIDI CC Monitor", 15.0, text_y, 20.0, WHITE);
+            text_y += 25.0;
+            
+            for (controller, value_opt) in cc_values.iter().enumerate() {
+                if let Some(value) = value_opt {
+                    // Draw textual value
+                    draw_text(&format!("CC {:03}: {:03}", controller, value), 15.0, text_y, 16.0, LIGHTGRAY);
+                    
+                    // Draw small bar graph indicating the level (0-127)
+                    let bar_width = 100.0;
+                    let fill_width = (*value as f32 / 127.0) * bar_width;
+                    
+                    // Background bar
+                    draw_rectangle(90.0, text_y - 12.0, bar_width, 10.0, Color::new(0.2, 0.2, 0.2, 0.8));
+                    // Foreground (fill) bar
+                    draw_rectangle(90.0, text_y - 12.0, fill_width, 10.0, Color::new(0.0, 0.8, 0.5, 0.8));
+                    
+                    text_y += 20.0;
+                }
             }
         }
 
