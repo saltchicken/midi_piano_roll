@@ -353,7 +353,23 @@ async fn main() {
                 let base_alpha = if note.end_time.is_none() { 0.9 } else { 0.5 };
                 let color = get_channel_color(note.channel, base_alpha * velocity_alpha);
 
+                // Draw the main note body
                 draw_rectangle(x, y, note_width, height, color);
+
+                // 1. Draw a subtle darker border so consecutive notes don't visually merge
+                let border_color = Color::new(color.r * 0.6, color.g * 0.6, color.b * 0.6, color.a);
+                draw_rectangle_lines(x, y, note_width, height, 1.0, border_color);
+
+                // 2. Draw a brighter "cap" at the start of the note (the bottom edge)
+                // This creates a visual "strike" making repeated fast notes obvious
+                let cap_color = Color::new(
+                    (color.r * 1.5).min(1.0),
+                    (color.g * 1.5).min(1.0),
+                    (color.b * 1.5).min(1.0),
+                    color.a,
+                );
+                // The bottom of the falling note is y + height
+                draw_rectangle(x, y + height - 2.0, note_width, 2.0, cap_color);
             }
         }
 
