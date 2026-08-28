@@ -275,7 +275,7 @@ async fn main() {
                 let color = if let Some(ch) = active_channel { 
                     get_channel_color(ch, 1.0) 
                 } else { 
-                    WHITE 
+                    BLACK 
                 };
                 draw_rectangle(x, screen_h - key_height, white_key_width, key_height, color);
                 draw_rectangle_lines(x, screen_h - key_height, white_key_width, key_height, 1.0, GRAY);
@@ -302,9 +302,9 @@ async fn main() {
                 let color = if let Some(ch) = active_channel { 
                     get_channel_color(ch, 1.0) 
                 } else { 
-                    BLACK 
+                    Color::new(0.1, 0.1, 0.1, 1.0)
                 };
-                draw_rectangle(x, screen_h - key_height, black_key_width, key_height * 0.65, color);
+                draw_rectangle(x, screen_h - key_height + 1.0, black_key_width, key_height * 0.65, color);
             }
         }
 
