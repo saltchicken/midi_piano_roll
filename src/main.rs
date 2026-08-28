@@ -7,7 +7,7 @@ use std::time::Instant;
 enum MidiMessage {
     NoteOn { channel: u8, pitch: u8, velocity: u8, timestamp: f64 },
     NoteOff { channel: u8, pitch: u8, timestamp: f64 },
-    ControlChange { channel: u8, controller: u8, value: u8 },
+    ControlChange { channel: u8, controller: u8, value: u8, timestamp: f64 },
 }
 
 struct NoteInfo {
@@ -63,7 +63,7 @@ fn setup_midi(tx: mpsc::Sender<MidiMessage>, app_start: Instant) -> Result<MidiI
                 } else if status == 0x80 { // Note Off
                     let _ = tx.send(MidiMessage::NoteOff { channel, pitch: data1, timestamp });
                 } else if status == 0xB0 { // Control Change (CC)
-                    let _ = tx.send(MidiMessage::ControlChange { channel, controller: data1, value: data2 });
+                    let _ = tx.send(MidiMessage::ControlChange { channel, controller: data1, value: data2, timestamp });
                 }
             }
         },
@@ -135,9 +135,10 @@ async fn main() {
     let mut notes: Vec<NoteInfo> = Vec::new();
     let mut active_pitches = [[false; 128]; 16];
     
-    // Track CC values for 16 channels, each with 128 controllers
-    let mut cc_values: [[Option<u8>; 128]; 16] = [[None; 128]; 16]; 
+    // Track CC values and their last updated timestamp for 16 channels, each with 128 controllers
+    let mut cc_values: [[Option<(u8, f64)>; 128]; 16] = [[None; 128]; 16]; 
     let note_speed = 300.0;
+    let cc_timeout = 3.0; // Seconds before a CC value disappears from the HUD
     
     // State for toggling UI elements
     let mut show_drums = true;
@@ -179,8 +180,19 @@ async fn main() {
                         note.end_time = Some(timestamp);
                     }
                 }
-                MidiMessage::ControlChange { channel, controller, value } => {
-                    cc_values[channel as usize][controller as usize] = Some(value);
+                MidiMessage::ControlChange { channel, controller, value, timestamp } => {
+                    cc_values[channel as usize][controller as usize] = Some((value, timestamp));
+                }
+            }
+        }
+
+        // Clean up expired CC values
+        for ch in 0..16 {
+            for v in cc_values[ch].iter_mut() {
+                if let Some((_, ts)) = v {
+                    if current_time - *ts > cc_timeout {
+                        *v = None;
+                    }
                 }
             }
         }
@@ -330,8 +342,8 @@ async fn main() {
         }
 
         // Render CC Monitor HUD in top left (offset by drum highway if open)
-        let mut cc_text_y = 30.0;
-        let cc_text_x = piano_x_start + 15.0; // Keeps the text anchored to the top-left of the piano
+        let mut cc_text_y = if show_hints { 120.0 } else { 30.0 };
+        let cc_text_x = screen_w - 280.0; // Anchored to the right
         
         let ccs_active = cc_values.iter().any(|ch_array| ch_array.iter().any(|v| v.is_some()));
         
@@ -341,14 +353,14 @@ async fn main() {
             
             for ch in 0..16 {
                 for (controller, value_opt) in cc_values[ch].iter().enumerate() {
-                    if let Some(value) = value_opt {
+                    if let Some((value, _)) = *value_opt {
                         // Channel numbering conceptually ranges 1-16 to the user (ch + 1)
                         let text = format!("CH {:02} | CC {:03}: {:03}", ch + 1, controller, value);
                         draw_text(&text, cc_text_x, cc_text_y, 16.0, LIGHTGRAY);
                         
                         // Draw small bar graph indicating the level (0-127)
                         let bar_width = 100.0;
-                        let fill_width = (*value as f32 / 127.0) * bar_width;
+                        let fill_width = (value as f32 / 127.0) * bar_width;
                         let bar_x = cc_text_x + 145.0; // Pushed right relative to the text block
                         
                         // Background bar
