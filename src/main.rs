@@ -409,7 +409,7 @@ async fn main() {
                     white_key_width,
                     key_height,
                     1.0,
-                    GRAY,
+                    Color::new(0.2, 0.2, 0.2, 1.0),
                 );
             }
         }
