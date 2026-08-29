@@ -306,25 +306,27 @@ async fn main() {
 
         // Render falling notes
         for note in &notes {
-            if show_drums && note.channel == 9 {
+            if note.channel == 9 {
                 // DRUM RENDERING (On the Left)
-                if let Some((_, lane)) = get_drum_lane(note.pitch) {
-                    let lane_w = drum_highway_w / 8.0;
-                    let center_x = drum_x_start + (lane as f32 * lane_w) + (lane_w / 2.0);
+                if show_drums {
+                    if let Some((_, lane)) = get_drum_lane(note.pitch) {
+                        let lane_w = drum_highway_w / 8.0;
+                        let center_x = drum_x_start + (lane as f32 * lane_w) + (lane_w / 2.0);
 
-                    // Drums are instantaneous; calculate Y based solely on start_time
-                    let y = screen_h
-                        - key_height
-                        - ((current_time - note.start_time) * note_speed as f64) as f32;
+                        // Drums are instantaneous; calculate Y based solely on start_time
+                        let y = screen_h
+                            - key_height
+                            - ((current_time - note.start_time) * note_speed as f64) as f32;
 
-                    if y > screen_h || y < -50.0 {
-                        continue;
+                        if y > screen_h || y < -50.0 {
+                            continue;
+                        }
+
+                        let velocity_alpha = (note.velocity as f32 / 127.0).clamp(0.4, 1.0);
+                        let color = get_channel_color(note.channel, velocity_alpha);
+
+                        draw_circle(center_x, y, lane_w * 0.3, color);
                     }
-
-                    let velocity_alpha = (note.velocity as f32 / 127.0).clamp(0.4, 1.0);
-                    let color = get_channel_color(note.channel, velocity_alpha);
-
-                    draw_circle(center_x, y, lane_w * 0.3, color);
                 }
             } else {
                 // STANDARD PIANO RENDERING (Offset by drum width)
@@ -383,8 +385,8 @@ async fn main() {
             if !is_black {
                 let mut active_channel = None;
                 for ch in 0..16 {
-                    // Ignore drum channel for the piano roll keys if special view is active
-                    if show_drums && ch == 9 {
+                    // Ignore drum channel for the piano roll keys entirely
+                    if ch == 9 {
                         continue;
                     }
 
@@ -418,8 +420,8 @@ async fn main() {
             if is_black {
                 let mut active_channel = None;
                 for ch in 0..16 {
-                    // Ignore drum channel for the piano roll keys if special view is active
-                    if show_drums && ch == 9 {
+                    // Ignore drum channel for the piano roll keys entirely
+                    if ch == 9 {
                         continue;
                     }
 
