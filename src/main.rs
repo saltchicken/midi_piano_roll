@@ -208,7 +208,8 @@ async fn main() {
     // State for toggling UI elements
     let mut show_drums = true;
     let mut show_cc = true;
-    let mut show_hints = true;
+    let mut show_hints = false;
+    let mut show_legend = false;
 
     loop {
         // Toggle states
@@ -217,6 +218,9 @@ async fn main() {
         }
         if is_key_pressed(KeyCode::C) {
             show_cc = !show_cc;
+        }
+        if is_key_pressed(KeyCode::L) {
+            show_legend = !show_legend;
         }
         // Slash key typically represents both '/' and '?' on standard US keyboards
         if is_key_pressed(KeyCode::Slash) {
@@ -497,7 +501,7 @@ async fn main() {
         }
 
         // Render CC Monitor HUD in top left (offset by drum highway if open)
-        let mut cc_text_y = if show_hints { 120.0 } else { 30.0 };
+        let mut cc_text_y = if show_hints { 150.0 } else { 30.0 };
         let cc_text_x = screen_w - 280.0; // Anchored to the right
 
         let ccs_active = cc_values
@@ -548,13 +552,15 @@ async fn main() {
             let hint_toggle = "[?] Toggle Hints";
             let hint_drums = format!("[D] Drums: {}", if show_drums { "ON" } else { "OFF" });
             let hint_cc = format!("[C] CC Monitor: {}", if show_cc { "ON" } else { "OFF" });
+            let hint_legend = format!("[L] Legend: {}", if show_legend { "ON" } else { "OFF" });
 
             // Measure the widest text line so we can right-align it properly
             let m1 = measure_text(hint_toggle, None, 20, 1.0);
             let m2 = measure_text(&hint_drums, None, 20, 1.0);
             let m3 = measure_text(&hint_cc, None, 20, 1.0);
+            let m4 = measure_text(&hint_legend, None, 20, 1.0);
 
-            let max_w = m1.width.max(m2.width).max(m3.width);
+            let max_w = m1.width.max(m2.width).max(m3.width).max(m4.width);
 
             let hints_x = screen_w - max_w - 15.0;
             let mut hints_y = 30.0;
@@ -564,6 +570,45 @@ async fn main() {
             draw_text(&hint_drums, hints_x, hints_y, 20.0, WHITE);
             hints_y += 25.0;
             draw_text(&hint_cc, hints_x, hints_y, 20.0, WHITE);
+            hints_y += 25.0;
+            draw_text(&hint_legend, hints_x, hints_y, 20.0, WHITE);
+        }
+
+        // Render Channel Color Legend
+        if show_legend {
+            let legend_x = 20.0;
+            let mut legend_y = 30.0;
+
+            // Draw a semi-transparent background to ensure readability over notes
+            draw_rectangle(
+                legend_x - 10.0, 
+                legend_y - 20.0, 
+                150.0, 
+                390.0, 
+                Color::new(0.0, 0.0, 0.0, 0.6)
+            );
+
+            draw_text("Channels", legend_x, legend_y, 20.0, WHITE);
+            legend_y += 15.0;
+
+            for ch in 0..16 {
+                let color = get_channel_color(ch as u8, 1.0);
+                
+                // Draw color swatch
+                draw_rectangle(legend_x, legend_y, 16.0, 16.0, color);
+                draw_rectangle_lines(legend_x, legend_y, 16.0, 16.0, 1.0, GRAY);
+                
+                // Draw channel label (explicitly label channel 10 as drums)
+                let label = if ch == 9 {
+                    format!("CH 10 (Drums)")
+                } else {
+                    format!("CH {}", ch + 1)
+                };
+                
+                draw_text(&label, legend_x + 25.0, legend_y + 13.0, 16.0, WHITE);
+                
+                legend_y += 22.0;
+            }
         }
 
         notes.retain(|n| {
