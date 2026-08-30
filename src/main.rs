@@ -1,3 +1,4 @@
+// src/main.rs
 use macroquad::prelude::*;
 use midir::{Ignore, MidiInput, MidiInputConnection};
 use std::sync::mpsc;
@@ -147,7 +148,7 @@ fn get_key_pos(pitch: u8) -> (bool, f32) {
     (is_black, adjusted_idx)
 }
 
-fn get_channel_color(channel: u8, alpha: f32) -> Color {
+fn get_channel_color(channel: u8, velocity: u8, alpha: f32) -> Color {
     let colors = [
         (1.0, 0.3, 0.3),
         (0.3, 1.0, 0.3),
@@ -167,7 +168,11 @@ fn get_channel_color(channel: u8, alpha: f32) -> Color {
         (1.0, 0.8, 0.6), // CH 13-16
     ];
     let (r, g, b) = colors[(channel as usize) % 16];
-    Color::new(r, g, b, alpha)
+    
+    // Scale the RGB values based on velocity to represent intensity
+    let intensity = (velocity as f32 / 127.0).clamp(0.2, 1.0);
+    
+    Color::new(r * intensity, g * intensity, b * intensity, alpha)
 }
 
 // Groups standard GM drum pitches into 8 visual lanes
@@ -198,7 +203,8 @@ async fn main() {
     };
 
     let mut notes: Vec<NoteInfo> = Vec::new();
-    let mut active_pitches = [[false; 128]; 16];
+    // Track exact velocity to light up keys based on intensity
+    let mut active_pitches = [[0u8; 128]; 16];
 
     // Track CC values and their last updated timestamp for 16 channels, each with 128 controllers
     let mut cc_values: [[Option<(u8, f64)>; 128]; 16] = [[None; 128]; 16];
@@ -250,14 +256,14 @@ async fn main() {
                         start_time: timestamp,
                         end_time: None,
                     });
-                    active_pitches[channel as usize][pitch as usize] = true;
+                    active_pitches[channel as usize][pitch as usize] = velocity;
                 }
                 MidiMessage::NoteOff {
                     channel,
                     pitch,
                     timestamp,
                 } => {
-                    active_pitches[channel as usize][pitch as usize] = false;
+                    active_pitches[channel as usize][pitch as usize] = 0;
                     if let Some(note) = notes
                         .iter_mut()
                         .rev()
@@ -326,8 +332,7 @@ async fn main() {
                             continue;
                         }
 
-                        let velocity_alpha = (note.velocity as f32 / 127.0).clamp(0.4, 1.0);
-                        let color = get_channel_color(note.channel, velocity_alpha);
+                        let color = get_channel_color(note.channel, note.velocity, 1.0);
 
                         draw_circle(center_x, y, lane_w * 0.3, color);
 
@@ -371,9 +376,8 @@ async fn main() {
                     continue;
                 }
 
-                let velocity_alpha = (note.velocity as f32 / 127.0).clamp(0.3, 1.0);
                 let base_alpha = if note.end_time.is_none() { 0.9 } else { 0.5 };
-                let color = get_channel_color(note.channel, base_alpha * velocity_alpha);
+                let color = get_channel_color(note.channel, note.velocity, base_alpha);
 
                 // Draw the main note body
                 draw_rectangle(x, y, note_width, height, color);
@@ -394,7 +398,6 @@ async fn main() {
                 draw_rectangle(x, y + height - 2.0, note_width, 2.0, cap_color);
 
                 // Draw velocity text at the bottom of the piano note
-                // Remved the `height > 12.0` check so it always renders
                 if show_velocity { 
                     let vel_text = format!("{}", note.velocity);
                     let text_size = measure_text(&vel_text, None, 14, 1.0);
@@ -415,22 +418,23 @@ async fn main() {
         for i in 21..=108 {
             let (is_black, white_idx) = get_key_pos(i);
             if !is_black {
-                let mut active_channel = None;
+                let mut active_channel_velocity = None;
                 for ch in 0..16 {
                     // Ignore drum channel for the piano roll keys entirely
                     if ch == 9 {
                         continue;
                     }
 
-                    if active_pitches[ch][i as usize] {
-                        active_channel = Some(ch as u8);
+                    let vel = active_pitches[ch][i as usize];
+                    if vel > 0 {
+                        active_channel_velocity = Some((ch as u8, vel));
                         break;
                     }
                 }
 
                 let x = piano_x_start + white_idx * white_key_width;
-                let color = if let Some(ch) = active_channel {
-                    get_channel_color(ch, 1.0)
+                let color = if let Some((ch, vel)) = active_channel_velocity {
+                    get_channel_color(ch, vel, 1.0)
                 } else {
                     BLACK
                 };
@@ -450,15 +454,16 @@ async fn main() {
         for i in 21..=108 {
             let (is_black, white_idx) = get_key_pos(i);
             if is_black {
-                let mut active_channel = None;
+                let mut active_channel_velocity = None;
                 for ch in 0..16 {
                     // Ignore drum channel for the piano roll keys entirely
                     if ch == 9 {
                         continue;
                     }
 
-                    if active_pitches[ch][i as usize] {
-                        active_channel = Some(ch as u8);
+                    let vel = active_pitches[ch][i as usize];
+                    if vel > 0 {
+                        active_channel_velocity = Some((ch as u8, vel));
                         break;
                     }
                 }
@@ -466,8 +471,8 @@ async fn main() {
                 let center_x =
                     piano_x_start + white_idx * white_key_width + (white_key_width / 2.0);
                 let x = center_x - (black_key_width / 2.0);
-                let color = if let Some(ch) = active_channel {
-                    get_channel_color(ch, 1.0)
+                let color = if let Some((ch, vel)) = active_channel_velocity {
+                    get_channel_color(ch, vel, 1.0)
                 } else {
                     Color::new(0.1, 0.1, 0.1, 1.0)
                 };
@@ -487,13 +492,21 @@ async fn main() {
             for lane in 0..8 {
                 let x = drum_x_start + (lane as f32 * lane_w);
 
-                // Check if any pitch mapped to this lane is currently active
-                let is_active = active_pitches[9].iter().enumerate().any(|(p, &active)| {
-                    active && get_drum_lane(p as u8).map(|(_, l)| l) == Some(lane)
-                });
+                // Find the maximum velocity of active drum pitches mapped to this lane
+                let max_vel = active_pitches[9]
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(p, &vel)| {
+                        if vel > 0 && get_drum_lane(p as u8).map(|(_, l)| l) == Some(lane) {
+                            Some(vel)
+                        } else {
+                            None
+                        }
+                    })
+                    .max();
 
-                let color = if is_active {
-                    get_channel_color(9, 1.0)
+                let color = if let Some(vel) = max_vel {
+                    get_channel_color(9, vel, 1.0)
                 } else {
                     Color::new(0.2, 0.2, 0.2, 1.0)
                 };
@@ -631,7 +644,7 @@ async fn main() {
             legend_y += 15.0;
 
             for ch in 0..16 {
-                let color = get_channel_color(ch as u8, 1.0);
+                let color = get_channel_color(ch as u8, 127, 1.0);
                 
                 // Draw color swatch
                 draw_rectangle(legend_x, legend_y, 16.0, 16.0, color);
