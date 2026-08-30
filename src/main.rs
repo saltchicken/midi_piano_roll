@@ -210,6 +210,7 @@ async fn main() {
     let mut show_cc = true;
     let mut show_hints = false;
     let mut show_legend = false;
+    let mut show_velocity = false;
 
     loop {
         // Toggle states
@@ -221,6 +222,9 @@ async fn main() {
         }
         if is_key_pressed(KeyCode::L) {
             show_legend = !show_legend;
+        }
+        if is_key_pressed(KeyCode::V) {
+            show_velocity = !show_velocity;
         }
         // Slash key typically represents both '/' and '?' on standard US keyboards
         if is_key_pressed(KeyCode::Slash) {
@@ -326,6 +330,18 @@ async fn main() {
                         let color = get_channel_color(note.channel, velocity_alpha);
 
                         draw_circle(center_x, y, lane_w * 0.3, color);
+
+                        // Draw velocity text on drums
+                        if show_velocity {
+                            let vel_text = format!("{}", note.velocity);
+                            let text_size = measure_text(&vel_text, None, 14, 1.0);
+                            let text_x = center_x - (text_size.width / 2.0);
+                            let text_y = y + (text_size.height / 2.0) - 2.0;
+
+                            // Small black drop-shadow for readability, then the white text
+                            draw_text(&vel_text, text_x + 1.0, text_y + 1.0, 14.0, Color::new(0.0, 0.0, 0.0, 0.8));
+                            draw_text(&vel_text, text_x, text_y, 14.0, WHITE);
+                        }
                     }
                 }
             } else {
@@ -376,6 +392,22 @@ async fn main() {
                 );
                 // The bottom of the falling note is y + height
                 draw_rectangle(x, y + height - 2.0, note_width, 2.0, cap_color);
+
+                // Draw velocity text at the bottom of the piano note
+                // Remved the `height > 12.0` check so it always renders
+                if show_velocity { 
+                    let vel_text = format!("{}", note.velocity);
+                    let text_size = measure_text(&vel_text, None, 14, 1.0);
+                    let text_x = center_x - (text_size.width / 2.0);
+                    
+                    // Anchor directly to the leading edge (bottom of the note).
+                    // If the note is very short, the text will safely spill upwards over the top.
+                    let text_y = y + height - 3.0;
+
+                    // Small black drop-shadow for readability, then the white text
+                    draw_text(&vel_text, text_x + 1.0, text_y + 1.0, 14.0, Color::new(0.0, 0.0, 0.0, 0.8));
+                    draw_text(&vel_text, text_x, text_y, 14.0, WHITE);
+                }
             }
         }
 
@@ -555,14 +587,17 @@ async fn main() {
             let hint_drums = format!("[D] Drums: {}", if show_drums { "ON" } else { "OFF" });
             let hint_cc = format!("[C] CC Monitor: {}", if show_cc { "ON" } else { "OFF" });
             let hint_legend = format!("[L] Legend: {}", if show_legend { "ON" } else { "OFF" });
+            let hint_velocity = format!("[V] Velocity: {}", if show_velocity { "ON" } else { "OFF" });
 
             // Measure the widest text line so we can right-align it properly
             let m1 = measure_text(hint_toggle, None, 20, 1.0);
             let m2 = measure_text(&hint_drums, None, 20, 1.0);
             let m3 = measure_text(&hint_cc, None, 20, 1.0);
             let m4 = measure_text(&hint_legend, None, 20, 1.0);
+            let m5 = measure_text(&hint_velocity, None, 20, 1.0);
 
-            let max_w = m1.width.max(m2.width).max(m3.width).max(m4.width);
+            // Include m5.width in the max_w calculation
+            let max_w = m1.width.max(m2.width).max(m3.width).max(m4.width).max(m5.width);
 
             let hints_x = screen_w - max_w - 15.0;
             let mut hints_y = 30.0;
@@ -574,6 +609,8 @@ async fn main() {
             draw_text(&hint_cc, hints_x, hints_y, 20.0, WHITE);
             hints_y += 25.0;
             draw_text(&hint_legend, hints_x, hints_y, 20.0, WHITE);
+            hints_y += 25.0;
+            draw_text(&hint_velocity, hints_x, hints_y, 20.0, WHITE);
         }
 
         // Render Channel Color Legend
