@@ -1,4 +1,3 @@
-// src/main.rs
 use macroquad::prelude::*;
 use midir::{Ignore, MidiInput, MidiInputConnection};
 use std::sync::mpsc;
@@ -376,8 +375,9 @@ async fn main() {
                     continue;
                 }
 
-                let base_alpha = if note.end_time.is_none() { 0.9 } else { 0.5 };
-                let color = get_channel_color(note.channel, note.velocity, base_alpha);
+                // Removed the `base_alpha` dimming logic so that the velocity
+                // determines the true intensity in the roll, unaffected by playback state.
+                let color = get_channel_color(note.channel, note.velocity, 1.0);
 
                 // Draw the main note body
                 draw_rectangle(x, y, note_width, height, color);
