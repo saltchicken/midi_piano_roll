@@ -80,6 +80,19 @@ impl PianoRollApp {
         if is_key_pressed(KeyCode::V) { self.show_velocity = !self.show_velocity; }
         if is_key_pressed(KeyCode::Slash) { self.show_hints = !self.show_hints; }
 
+        // --- NEW: MIDI Panic / Reset ---
+        if is_key_pressed(KeyCode::Backspace) {
+            // Clear the active pitches holding the keys down
+            self.active_pitches = [[0u8; NUM_PITCHES]; NUM_CHANNELS];
+            
+            // Close out any falling notes that never received a NoteOff
+            for note in self.notes.iter_mut() {
+                if note.end_time.is_none() {
+                    note.end_time = Some(current_time);
+                }
+            }
+        }
+
         // Process MIDI messages
         while let Ok(msg) = rx.try_recv() {
             match msg {
@@ -303,6 +316,7 @@ impl PianoRollApp {
         if self.show_hints {
             let hints = [
                 "[?] Toggle Hints".to_string(),
+                "[Backspace] Reset Notes".to_string(),
                 format!("[D] Drums: {}", if self.show_drums { "ON" } else { "OFF" }),
                 format!("[C] CC Monitor: {}", if self.show_cc { "ON" } else { "OFF" }),
                 format!("[L] Legend: {}", if self.show_legend { "ON" } else { "OFF" }),
