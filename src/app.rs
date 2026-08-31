@@ -132,10 +132,30 @@ impl PianoRollApp {
                         if y > screen_h || y < -50.0 { continue; }
 
                         let color = get_channel_color(note.channel, note.velocity, 1.0);
-                        draw_circle(center_x, y, lane_w * 0.3, color);
+                        
+                        // New blocky representation with solid borders
+                        let note_w = lane_w * 0.85;
+                        let note_h = 24.0;
+                        let x = center_x - note_w / 2.0;
+                        let rect_y = y - note_h / 2.0;
+
+                        // Solid base fill
+                        draw_rectangle(x, rect_y, note_w, note_h, color);
+                        
+                        // Solid highlight (no alpha blending) to make it noticeable and pill-like
+                        let highlight = Color::new(
+                            (color.r + 0.4).min(1.0),
+                            (color.g + 0.4).min(1.0),
+                            (color.b + 0.4).min(1.0),
+                            1.0
+                        );
+                        draw_rectangle(x + 2.0, rect_y + 2.0, note_w - 4.0, 6.0, highlight);
+                        
+                        // Thick solid border ensures new notes visibly occlude older ones
+                        draw_rectangle_lines(x, rect_y, note_w, note_h, 2.0, BLACK);
 
                         if self.show_velocity {
-                            self.draw_velocity_text(note.velocity, center_x, y + 2.0);
+                            self.draw_velocity_text(note.velocity, center_x, rect_y - 6.0);
                         }
                     }
                 }
@@ -303,7 +323,8 @@ impl PianoRollApp {
         let text_size = measure_text(&vel_text, None, 14, 1.0);
         let text_x = anchor_x - (text_size.width / 2.0);
         
-        draw_text(&vel_text, text_x + 1.0, anchor_y + 1.0, 14.0, Color::new(0.0, 0.0, 0.0, 0.8));
+        // Draw solid shadow/border to avoid any alpha blending
+        draw_text(&vel_text, text_x + 1.0, anchor_y + 1.0, 14.0, BLACK);
         draw_text(&vel_text, text_x, anchor_y, 14.0, WHITE);
     }
 
