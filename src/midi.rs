@@ -1,12 +1,12 @@
+// src/midi.rs
+
 use midir::{Ignore, MidiInput, MidiInputConnection};
 use std::sync::mpsc;
-use std::time::Instant;
 
 use crate::types::MidiMessage;
 
 pub fn setup_midi(
     tx: mpsc::Sender<MidiMessage>,
-    app_start: Instant,
 ) -> Result<MidiInputConnection<()>, Box<dyn std::error::Error>> {
     let mut midi_in = MidiInput::new("Piano Roll Input")?;
     midi_in.ignore(Ignore::None);
@@ -30,7 +30,6 @@ pub fn setup_midi(
         in_port,
         "midir-read-input",
         move |_, message, _| {
-            let timestamp = app_start.elapsed().as_secs_f64();
             if message.len() >= 3 {
                 let status = message[0] & 0xF0;
                 let channel = message[0] & 0x0F;
@@ -39,14 +38,14 @@ pub fn setup_midi(
 
                 if status == 0x90 {
                     if data2 > 0 {
-                        let _ = tx.send(MidiMessage::NoteOn { channel, pitch: data1, velocity: data2, timestamp });
+                        let _ = tx.send(MidiMessage::NoteOn { channel, pitch: data1, velocity: data2 });
                     } else {
-                        let _ = tx.send(MidiMessage::NoteOff { channel, pitch: data1, timestamp });
+                        let _ = tx.send(MidiMessage::NoteOff { channel, pitch: data1 });
                     }
                 } else if status == 0x80 {
-                    let _ = tx.send(MidiMessage::NoteOff { channel, pitch: data1, timestamp });
+                    let _ = tx.send(MidiMessage::NoteOff { channel, pitch: data1 });
                 } else if status == 0xB0 {
-                    let _ = tx.send(MidiMessage::ControlChange { channel, controller: data1, value: data2, timestamp });
+                    let _ = tx.send(MidiMessage::ControlChange { channel, controller: data1, value: data2 });
                 }
             }
         },

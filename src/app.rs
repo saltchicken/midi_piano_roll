@@ -13,6 +13,7 @@ pub struct PianoRollApp {
     
     pub playback_time: f64,
     pub is_playing: bool,
+    pub playback_speed: f64,
 
     active_pitches: [[u8; NUM_PITCHES]; NUM_CHANNELS],
     cc_values: [[Option<(u8, f64)>; NUM_CONTROLLERS]; NUM_CHANNELS],
@@ -31,6 +32,7 @@ impl PianoRollApp {
             song_notes: Vec::new(),
             playback_time: 0.0,
             is_playing: false,
+            playback_speed: 1.0,
             active_pitches: [[0u8; NUM_PITCHES]; NUM_CHANNELS],
             cc_values: [[None; NUM_CONTROLLERS]; NUM_CHANNELS],
             show_drums: true,
@@ -43,7 +45,7 @@ impl PianoRollApp {
 
     pub fn advance_time(&mut self, dt: f64) {
         if self.is_playing {
-            self.playback_time += dt;
+            self.playback_time += dt * self.playback_speed;
         }
     }
 
@@ -52,7 +54,13 @@ impl PianoRollApp {
             match load_midi_file(path.to_str().unwrap_or("")) {
                 Ok(notes) => {
                     self.song_notes = notes;
-                    self.playback_time = 0.0;
+                    
+                    // Find the very first note in the song (some songs have empty space at the beginning)
+                    let first_note_t = self.song_notes.first().map(|n| n.start_time).unwrap_or(0.0);
+                    
+                    // Push playback_time back so the first note takes EXACTLY `LEAD_IN_SEC` to reach the keys
+                    self.playback_time = first_note_t - LEAD_IN_SEC;
+                    
                     self.is_playing = true;
                 }
                 Err(e) => eprintln!("Failed to load MIDI: {}", e),
@@ -64,6 +72,16 @@ impl PianoRollApp {
         // Playback Controls
         if is_key_pressed(KeyCode::Space) { self.is_playing = !self.is_playing; }
         if is_key_pressed(KeyCode::O) { self.load_song(); }
+        
+        // Seek controls
+        if is_key_pressed(KeyCode::Left) { self.playback_time -= 5.0; }
+        if is_key_pressed(KeyCode::Right) { self.playback_time += 5.0; }
+
+        // Speed controls
+        if is_key_pressed(KeyCode::Up) { self.playback_speed += 0.25; }
+        if is_key_pressed(KeyCode::Down) { self.playback_speed -= 0.25; }
+        if is_key_pressed(KeyCode::R) { self.playback_speed *= -1.0; }
+        if is_key_pressed(KeyCode::N) { self.playback_speed = 1.0; }
         
         // View Controls
         if is_key_pressed(KeyCode::D) { self.show_drums = !self.show_drums; }
@@ -160,7 +178,6 @@ impl PianoRollApp {
     fn draw_falling_notes(&self, screen_h: f32, drum_highway_w: f32, drum_x_start: f32, piano_x_start: f32, white_key_width: f32, black_key_width: f32) {
         let key_y = screen_h - KEY_HEIGHT;
 
-        // Iterate through both pre-recorded song notes and real-time played notes
         for note in self.song_notes.iter().chain(self.live_notes.iter()) {
             if note.channel == DRUM_CHANNEL {
                 if self.show_drums {
@@ -171,7 +188,6 @@ impl PianoRollApp {
                         let time_until_hit = note.start_time - self.playback_time;
                         let y = key_y - (time_until_hit * NOTE_SPEED_PX_PER_SEC as f64) as f32;
 
-                        // Give drum notes a short visual height manually
                         if y > screen_h || y < -50.0 { continue; }
 
                         let color = get_channel_color(note.channel, note.velocity, 1.0);
@@ -205,7 +221,6 @@ impl PianoRollApp {
 
                 let end_t = note.end_time.unwrap_or(self.playback_time);
                 
-                // Synthesia predictive math: positive time_until_hit draws ABOVE keys, negative BELOW
                 let time_until_hit = note.start_time - self.playback_time;
                 let time_until_end = end_t - self.playback_time;
 
@@ -292,7 +307,12 @@ impl PianoRollApp {
     }
 
     fn draw_hud(&self, screen_w: f32) {
-        let mut cc_text_y = if self.show_hints { 200.0 } else { 30.0 };
+        // Draw Playback Time at Top Center
+        let time_str = format!("Time: {:.1}s ({:.2}x)", self.playback_time, self.playback_speed);
+        let time_size = measure_text(&time_str, None, 24, 1.0);
+        draw_text(&time_str, (screen_w / 2.0) - (time_size.width / 2.0), 30.0, 24.0, if self.is_playing { GREEN } else { YELLOW });
+
+        let mut cc_text_y = if self.show_hints { 260.0 } else { 30.0 };
         let cc_text_x = screen_w - 280.0;
 
         let ccs_active = self.cc_values.iter().any(|ch_array| ch_array.iter().any(|v| v.is_some()));
@@ -323,8 +343,12 @@ impl PianoRollApp {
         if self.show_hints {
             let hints = [
                 "[?] Toggle Hints".to_string(),
-                "[Space] Play/Pause Song".to_string(),
                 "[O] Load MIDI File".to_string(),
+                "[Space] Play/Pause Song".to_string(),
+                "[<] [>] Seek Time".to_string(),
+                "[^] [v] Adjust Speed".to_string(),
+                "[R] Reverse Direction".to_string(),
+                "[N] Normal Speed (1.0x)".to_string(),
                 "[Backspace] Clear Notes".to_string(),
                 format!("[D] Drums: {}", if self.show_drums { "ON" } else { "OFF" }),
                 format!("[C] CC Monitor: {}", if self.show_cc { "ON" } else { "OFF" }),
