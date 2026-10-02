@@ -1,12 +1,19 @@
 use macroquad::prelude::*;
 use std::sync::mpsc;
+use rfd::FileDialog;
 
 use crate::constants::*;
 use crate::helpers::{get_channel_color, get_drum_lane, get_key_pos};
 use crate::types::{MidiMessage, NoteInfo};
+use crate::midi_file::load_midi_file;
 
 pub struct PianoRollApp {
-    notes: Vec<NoteInfo>,
+    live_notes: Vec<NoteInfo>,
+    pub song_notes: Vec<NoteInfo>,
+    
+    pub playback_time: f64,
+    pub is_playing: bool,
+
     active_pitches: [[u8; NUM_PITCHES]; NUM_CHANNELS],
     cc_values: [[Option<(u8, f64)>; NUM_CONTROLLERS]; NUM_CHANNELS],
     
@@ -20,18 +27,45 @@ pub struct PianoRollApp {
 impl PianoRollApp {
     pub fn new() -> Self {
         Self {
-            notes: Vec::new(),
+            live_notes: Vec::new(),
+            song_notes: Vec::new(),
+            playback_time: 0.0,
+            is_playing: false,
             active_pitches: [[0u8; NUM_PITCHES]; NUM_CHANNELS],
             cc_values: [[None; NUM_CONTROLLERS]; NUM_CHANNELS],
             show_drums: true,
             show_cc: true,
-            show_hints: false,
+            show_hints: true,
             show_legend: false,
             show_velocity: false,
         }
     }
 
-    pub fn update(&mut self, rx: &mpsc::Receiver<MidiMessage>, current_time: f64) {
+    pub fn advance_time(&mut self, dt: f64) {
+        if self.is_playing {
+            self.playback_time += dt;
+        }
+    }
+
+    pub fn load_song(&mut self) {
+        if let Some(path) = FileDialog::new().add_filter("MIDI", &["mid", "midi"]).pick_file() {
+            match load_midi_file(path.to_str().unwrap_or("")) {
+                Ok(notes) => {
+                    self.song_notes = notes;
+                    self.playback_time = 0.0;
+                    self.is_playing = true;
+                }
+                Err(e) => eprintln!("Failed to load MIDI: {}", e),
+            }
+        }
+    }
+
+    pub fn update(&mut self, rx: &mpsc::Receiver<MidiMessage>) {
+        // Playback Controls
+        if is_key_pressed(KeyCode::Space) { self.is_playing = !self.is_playing; }
+        if is_key_pressed(KeyCode::O) { self.load_song(); }
+        
+        // View Controls
         if is_key_pressed(KeyCode::D) { self.show_drums = !self.show_drums; }
         if is_key_pressed(KeyCode::C) { self.show_cc = !self.show_cc; }
         if is_key_pressed(KeyCode::L) { self.show_legend = !self.show_legend; }
@@ -40,37 +74,40 @@ impl PianoRollApp {
 
         if is_key_pressed(KeyCode::Backspace) {
             self.active_pitches = [[0u8; NUM_PITCHES]; NUM_CHANNELS];
-            for note in self.notes.iter_mut() {
+            for note in self.live_notes.iter_mut() {
                 if note.end_time.is_none() {
-                    note.end_time = Some(current_time);
+                    note.end_time = Some(self.playback_time);
                 }
             }
+            self.song_notes.clear();
+            self.playback_time = 0.0;
+            self.is_playing = false;
         }
 
         while let Ok(msg) = rx.try_recv() {
             match msg {
-                MidiMessage::NoteOn { channel, pitch, velocity, timestamp } => {
-                    self.notes.push(NoteInfo {
+                MidiMessage::NoteOn { channel, pitch, velocity, .. } => {
+                    self.live_notes.push(NoteInfo {
                         channel,
                         pitch,
                         velocity,
-                        start_time: timestamp,
+                        start_time: self.playback_time,
                         end_time: None,
                     });
                     self.active_pitches[channel as usize][pitch as usize] = velocity;
                 }
-                MidiMessage::NoteOff { channel, pitch, timestamp } => {
+                MidiMessage::NoteOff { channel, pitch, .. } => {
                     self.active_pitches[channel as usize][pitch as usize] = 0;
-                    if let Some(note) = self.notes
+                    if let Some(note) = self.live_notes
                         .iter_mut()
                         .rev()
                         .find(|n| n.pitch == pitch && n.channel == channel && n.end_time.is_none())
                     {
-                        note.end_time = Some(timestamp);
+                        note.end_time = Some(self.playback_time);
                     }
                 }
-                MidiMessage::ControlChange { channel, controller, value, timestamp } => {
-                    self.cc_values[channel as usize][controller as usize] = Some((value, timestamp));
+                MidiMessage::ControlChange { channel, controller, value, .. } => {
+                    self.cc_values[channel as usize][controller as usize] = Some((value, self.playback_time));
                 }
             }
         }
@@ -78,7 +115,7 @@ impl PianoRollApp {
         for ch in 0..NUM_CHANNELS {
             for v in self.cc_values[ch].iter_mut() {
                 if let Some((_, ts)) = v {
-                    if current_time - *ts > CC_HUD_TIMEOUT_SEC {
+                    if self.playback_time - *ts > CC_HUD_TIMEOUT_SEC {
                         *v = None;
                     }
                 }
@@ -86,16 +123,16 @@ impl PianoRollApp {
         }
 
         let screen_h = screen_height();
-        self.notes.retain(|n| {
+        self.live_notes.retain(|n| {
             if let Some(et) = n.end_time {
-                ((current_time - et) * NOTE_SPEED_PX_PER_SEC as f64) < screen_h as f64
+                ((self.playback_time - et) * NOTE_SPEED_PX_PER_SEC as f64) < screen_h as f64
             } else {
                 true
             }
         });
     }
 
-    pub fn draw(&self, current_time: f64) {
+    pub fn draw(&self) {
         clear_background(Color::new(0.1, 0.1, 0.12, 1.0));
 
         let screen_w = screen_width();
@@ -110,7 +147,7 @@ impl PianoRollApp {
         let white_key_width = piano_w / NUM_WHITE_KEYS;
         let black_key_width = white_key_width * 0.6;
 
-        self.draw_falling_notes(current_time, screen_h, drum_highway_w, drum_x_start, piano_x_start, white_key_width, black_key_width);
+        self.draw_falling_notes(screen_h, drum_highway_w, drum_x_start, piano_x_start, white_key_width, black_key_width);
         self.draw_piano_keys(screen_h, piano_x_start, white_key_width, black_key_width);
         
         if self.show_drums {
@@ -120,29 +157,31 @@ impl PianoRollApp {
         self.draw_hud(screen_w);
     }
 
-    fn draw_falling_notes(&self, current_time: f64, screen_h: f32, drum_highway_w: f32, drum_x_start: f32, piano_x_start: f32, white_key_width: f32, black_key_width: f32) {
-        for note in &self.notes {
+    fn draw_falling_notes(&self, screen_h: f32, drum_highway_w: f32, drum_x_start: f32, piano_x_start: f32, white_key_width: f32, black_key_width: f32) {
+        let key_y = screen_h - KEY_HEIGHT;
+
+        // Iterate through both pre-recorded song notes and real-time played notes
+        for note in self.song_notes.iter().chain(self.live_notes.iter()) {
             if note.channel == DRUM_CHANNEL {
                 if self.show_drums {
                     if let Some((_, lane)) = get_drum_lane(note.pitch) {
                         let lane_w = drum_highway_w / 8.0;
                         let center_x = drum_x_start + (lane as f32 * lane_w) + (lane_w / 2.0);
-                        let y = screen_h - KEY_HEIGHT - ((current_time - note.start_time) * NOTE_SPEED_PX_PER_SEC as f64) as f32;
+                        
+                        let time_until_hit = note.start_time - self.playback_time;
+                        let y = key_y - (time_until_hit * NOTE_SPEED_PX_PER_SEC as f64) as f32;
 
+                        // Give drum notes a short visual height manually
                         if y > screen_h || y < -50.0 { continue; }
 
                         let color = get_channel_color(note.channel, note.velocity, 1.0);
-                        
-                        // New blocky representation with solid borders
                         let note_w = lane_w * 0.85;
                         let note_h = 24.0;
                         let x = center_x - note_w / 2.0;
                         let rect_y = y - note_h / 2.0;
 
-                        // Solid base fill
                         draw_rectangle(x, rect_y, note_w, note_h, color);
                         
-                        // Solid highlight (no alpha blending) to make it noticeable and pill-like
                         let highlight = Color::new(
                             (color.r + 0.4).min(1.0),
                             (color.g + 0.4).min(1.0),
@@ -150,8 +189,6 @@ impl PianoRollApp {
                             1.0
                         );
                         draw_rectangle(x + 2.0, rect_y + 2.0, note_w - 4.0, 6.0, highlight);
-                        
-                        // Thick solid border ensures new notes visibly occlude older ones
                         draw_rectangle_lines(x, rect_y, note_w, note_h, 2.0, BLACK);
 
                         if self.show_velocity {
@@ -166,9 +203,14 @@ impl PianoRollApp {
                 let note_width = if is_black { black_key_width } else { white_key_width - 2.0 };
                 let x = center_x - (note_width / 2.0);
 
-                let end_t = note.end_time.unwrap_or(current_time);
-                let y_bottom = screen_h - KEY_HEIGHT - ((current_time - end_t) * NOTE_SPEED_PX_PER_SEC as f64) as f32;
-                let y_top = screen_h - KEY_HEIGHT - ((current_time - note.start_time) * NOTE_SPEED_PX_PER_SEC as f64) as f32;
+                let end_t = note.end_time.unwrap_or(self.playback_time);
+                
+                // Synthesia predictive math: positive time_until_hit draws ABOVE keys, negative BELOW
+                let time_until_hit = note.start_time - self.playback_time;
+                let time_until_end = end_t - self.playback_time;
+
+                let y_bottom = key_y - (time_until_hit * NOTE_SPEED_PX_PER_SEC as f64) as f32;
+                let y_top = key_y - (time_until_end * NOTE_SPEED_PX_PER_SEC as f64) as f32;
 
                 let y = y_top;
                 let height = (y_bottom - y_top).max(3.0);
@@ -250,7 +292,7 @@ impl PianoRollApp {
     }
 
     fn draw_hud(&self, screen_w: f32) {
-        let mut cc_text_y = if self.show_hints { 150.0 } else { 30.0 };
+        let mut cc_text_y = if self.show_hints { 200.0 } else { 30.0 };
         let cc_text_x = screen_w - 280.0;
 
         let ccs_active = self.cc_values.iter().any(|ch_array| ch_array.iter().any(|v| v.is_some()));
@@ -281,7 +323,9 @@ impl PianoRollApp {
         if self.show_hints {
             let hints = [
                 "[?] Toggle Hints".to_string(),
-                "[Backspace] Reset Notes".to_string(),
+                "[Space] Play/Pause Song".to_string(),
+                "[O] Load MIDI File".to_string(),
+                "[Backspace] Clear Notes".to_string(),
                 format!("[D] Drums: {}", if self.show_drums { "ON" } else { "OFF" }),
                 format!("[C] CC Monitor: {}", if self.show_cc { "ON" } else { "OFF" }),
                 format!("[L] Legend: {}", if self.show_legend { "ON" } else { "OFF" }),
@@ -323,7 +367,6 @@ impl PianoRollApp {
         let text_size = measure_text(&vel_text, None, 14, 1.0);
         let text_x = anchor_x - (text_size.width / 2.0);
         
-        // Draw solid shadow/border to avoid any alpha blending
         draw_text(&vel_text, text_x + 1.0, anchor_y + 1.0, 14.0, BLACK);
         draw_text(&vel_text, text_x, anchor_y, 14.0, WHITE);
     }

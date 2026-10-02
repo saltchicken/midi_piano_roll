@@ -6,3 +6,5 @@ edition = "2021"
 [dependencies]
 macroquad = "0.4"
 midir = "0.10"
+midly = "0.5"
+rfd = "0.14"

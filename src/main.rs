@@ -2,6 +2,7 @@ mod app;
 mod constants;
 mod helpers;
 mod midi;
+mod midi_file;
 mod types;
 
 use macroquad::prelude::*;
@@ -27,10 +28,12 @@ async fn main() {
     let mut app = PianoRollApp::new();
 
     loop {
-        let current_time = app_start.elapsed().as_secs_f64();
+        // Feed real-time frame progression into the app
+        let dt = get_frame_time() as f64;
+        app.advance_time(dt);
         
-        app.update(&rx, current_time);
-        app.draw(current_time);
+        app.update(&rx);
+        app.draw(); // Time is now managed internally by the app
 
         next_frame().await
     }
