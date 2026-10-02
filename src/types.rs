@@ -1,5 +1,3 @@
-// src/types.rs
-
 #[derive(Clone, Copy, Debug)]
 pub enum MidiMessage {
     NoteOn {
@@ -24,4 +22,5 @@ pub struct NoteInfo {
     pub velocity: u8,
     pub start_time: f64,
     pub end_time: Option<f64>,
+    pub is_hit: bool,
 }

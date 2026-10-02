@@ -47,6 +47,7 @@ pub fn load_midi_file(path: &str) -> Result<Vec<NoteInfo>, Box<dyn std::error::E
                                         velocity: start_vel,
                                         start_time,
                                         end_time: Some(current_time_sec),
+                                        is_hit: false,
                                     });
                                 }
                             }
@@ -60,6 +61,7 @@ pub fn load_midi_file(path: &str) -> Result<Vec<NoteInfo>, Box<dyn std::error::E
                                     velocity: start_vel,
                                     start_time,
                                     end_time: Some(current_time_sec),
+                                    is_hit: false,
                                 });
                             }
                         }
