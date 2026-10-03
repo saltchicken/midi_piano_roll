@@ -3,7 +3,9 @@ mod constants;
 mod helpers;
 mod midi;
 mod midi_file;
+mod render;
 mod types;
+mod ui;
 
 use macroquad::prelude::*;
 use std::sync::mpsc;
@@ -27,13 +29,17 @@ async fn main() {
 
     loop {
         let dt = (get_frame_time() as f64).min(0.1);
+        
+        // 1. Process Logic
         app.advance_time(dt);
-
         app.update(&rx);
-        app.draw(); 
 
+        // 2. Draw Graphics
+        render::draw(&app); 
+
+        // 3. Draw UI
         egui_macroquad::ui(|egui_ctx| {
-            app.ui(egui_ctx);
+            ui::draw_controls(&mut app, egui_ctx);
         });
         egui_macroquad::draw();
 
