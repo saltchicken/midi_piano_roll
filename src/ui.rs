@@ -47,5 +47,19 @@ pub fn draw_controls(app: &mut PianoRollApp, ctx: &egui::Context) {
             ui.add_space(10.0);
             ui.label("Zoom (Note Speed)");
             ui.add(egui::Slider::new(&mut app.note_speed_px_per_sec, 50.0..=2000.0));
+
+            ui.add_space(10.0);
+            ui.label("Piano Range");
+            ui.horizontal(|ui| {
+                ui.label("Min:");
+                ui.add(egui::DragValue::new(&mut app.min_pitch).range(0..=127));
+                ui.label("Max:");
+                ui.add(egui::DragValue::new(&mut app.max_pitch).range(0..=127));
+            });
+            
+            // Prevent inverted ranges
+            if app.min_pitch > app.max_pitch {
+                app.max_pitch = app.min_pitch;
+            }
         });
 }

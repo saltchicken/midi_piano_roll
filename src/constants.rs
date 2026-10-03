@@ -9,4 +9,3 @@ pub const CC_HUD_TIMEOUT_SEC: f64 = 3.0;
 pub const LEAD_IN_SEC: f64 = 3.0;
 
 pub const KEY_HEIGHT: f32 = 80.0;
-pub const NUM_WHITE_KEYS: f32 = 52.0;

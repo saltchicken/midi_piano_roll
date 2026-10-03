@@ -16,11 +16,17 @@ pub fn draw(app: &PianoRollApp) {
     let drum_x_start = 0.0;
     let piano_x_start = drum_highway_w;
 
-    let white_key_width = piano_w / NUM_WHITE_KEYS;
+    // Dynamically calculate the number of white keys based on app min/max pitch
+    let (_, min_white_idx) = get_key_pos(app.min_pitch);
+    let (_, max_white_idx) = get_key_pos(app.max_pitch);
+    let min_white_idx_floor = min_white_idx.floor();
+    let num_white_keys = max_white_idx.floor() - min_white_idx_floor + 1.0;
+
+    let white_key_width = piano_w / num_white_keys.max(1.0);
     let black_key_width = white_key_width * 0.6;
 
-    draw_falling_notes(app, screen_h, drum_highway_w, drum_x_start, piano_x_start, white_key_width, black_key_width);
-    draw_piano_keys(app, screen_h, piano_x_start, white_key_width, black_key_width);
+    draw_falling_notes(app, screen_h, drum_highway_w, drum_x_start, piano_x_start, white_key_width, black_key_width, min_white_idx_floor);
+    draw_piano_keys(app, screen_h, piano_x_start, white_key_width, black_key_width, min_white_idx_floor);
     
     if app.show_drums {
         draw_drum_pads(app, screen_h, drum_highway_w, drum_x_start);
@@ -29,7 +35,7 @@ pub fn draw(app: &PianoRollApp) {
     draw_hud(app, screen_w);
 }
 
-fn draw_falling_notes(app: &PianoRollApp, screen_h: f32, drum_highway_w: f32, drum_x_start: f32, piano_x_start: f32, white_key_width: f32, black_key_width: f32) {
+fn draw_falling_notes(app: &PianoRollApp, screen_h: f32, drum_highway_w: f32, drum_x_start: f32, piano_x_start: f32, white_key_width: f32, black_key_width: f32, min_white_idx_floor: f32) {
     let key_y = screen_h - KEY_HEIGHT;
 
     for note in app.song_notes.iter().chain(app.live_notes.iter()) {
@@ -68,8 +74,12 @@ fn draw_falling_notes(app: &PianoRollApp, screen_h: f32, drum_highway_w: f32, dr
                 }
             }
         } else {
+            // Drop notes that are currently outside of the configured view range
+            if note.pitch < app.min_pitch || note.pitch > app.max_pitch { continue; }
+
             let (is_black, white_idx) = get_key_pos(note.pitch);
-            let center_x = piano_x_start + white_idx * white_key_width + (white_key_width / 2.0);
+            let adjusted_white_idx = white_idx - min_white_idx_floor;
+            let center_x = piano_x_start + adjusted_white_idx * white_key_width + (white_key_width / 2.0);
             
             let note_width = if is_black { black_key_width } else { white_key_width - 2.0 };
             let x = center_x - (note_width / 2.0);
@@ -103,23 +113,27 @@ fn draw_falling_notes(app: &PianoRollApp, screen_h: f32, drum_highway_w: f32, dr
     }
 }
 
-fn draw_piano_keys(app: &PianoRollApp, screen_h: f32, piano_x_start: f32, white_key_width: f32, black_key_width: f32) {
-    for i in 21..=108 {
+fn draw_piano_keys(app: &PianoRollApp, screen_h: f32, piano_x_start: f32, white_key_width: f32, black_key_width: f32, min_white_idx_floor: f32) {
+    for i in app.min_pitch..=app.max_pitch {
         let (is_black, white_idx) = get_key_pos(i);
+        let adjusted_white_idx = white_idx - min_white_idx_floor;
+        
         if !is_black {
             let color = get_active_key_color(app, i).unwrap_or(BLACK);
-            let x = piano_x_start + white_idx * white_key_width;
+            let x = piano_x_start + adjusted_white_idx * white_key_width;
             
             draw_rectangle(x, screen_h - KEY_HEIGHT, white_key_width, KEY_HEIGHT, color);
             draw_rectangle_lines(x, screen_h - KEY_HEIGHT, white_key_width, KEY_HEIGHT, 1.0, Color::new(0.2, 0.2, 0.2, 1.0));
         }
     }
 
-    for i in 21..=108 {
+    for i in app.min_pitch..=app.max_pitch {
         let (is_black, white_idx) = get_key_pos(i);
+        let adjusted_white_idx = white_idx - min_white_idx_floor;
+        
         if is_black {
             let color = get_active_key_color(app, i).unwrap_or(Color::new(0.1, 0.1, 0.1, 1.0));
-            let center_x = piano_x_start + white_idx * white_key_width + (white_key_width / 2.0);
+            let center_x = piano_x_start + adjusted_white_idx * white_key_width + (white_key_width / 2.0);
             let x = center_x - (black_key_width / 2.0);
             
             draw_rectangle(x, screen_h - KEY_HEIGHT + 1.0, black_key_width, KEY_HEIGHT * 0.65, color);

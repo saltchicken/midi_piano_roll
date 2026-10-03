@@ -14,9 +14,8 @@ pub struct PianoRollApp {
     pub is_playing: bool,
     pub playback_speed: f64,
     pub practice_mode: bool,
-    pub note_speed_px_per_sec: f32, // Dynamic zoom variable
+    pub note_speed_px_per_sec: f32,
 
-    // Stores (velocity, count) to fix the polyphony bug
     pub active_pitches: [[(u8, u8); NUM_PITCHES]; NUM_CHANNELS],
     pub cc_values: [[Option<(u8, f64)>; NUM_CONTROLLERS]; NUM_CHANNELS],
     
@@ -24,6 +23,10 @@ pub struct PianoRollApp {
     pub show_cc: bool,
     pub show_legend: bool,
     pub show_velocity: bool,
+    
+    // Add dynamic range properties
+    pub min_pitch: u8,
+    pub max_pitch: u8,
 }
 
 impl PianoRollApp {
@@ -42,6 +45,8 @@ impl PianoRollApp {
             show_cc: true,
             show_legend: false,
             show_velocity: false,
+            min_pitch: 21,  // Default to standard 88-key piano A0
+            max_pitch: 108, // Default to standard 88-key piano C8
         }
     }
 
@@ -51,18 +56,15 @@ impl PianoRollApp {
         }
 
         if self.practice_mode && self.playback_speed > 0.0 {
-            let hit_window = 0.1; // Allowed time variance (seconds) to hit a note early
+            let hit_window = 0.1;
 
-            // 1. Mark notes as hit if they are in the window and the corresponding key is held
             for note in self.song_notes.iter_mut() {
                 if !note.is_hit {
                     if note.channel == DRUM_CHANNEL {
-                        // Auto-pass drum notes since they aren't melody keys
                         if note.start_time <= self.playback_time {
                             note.is_hit = true;
                         }
                     } else {
-                        // Mark hit if the user is pressing the required pitch
                         if note.start_time <= self.playback_time + hit_window {
                             if Self::is_pitch_active(&self.active_pitches, note.pitch) {
                                 note.is_hit = true;
@@ -72,26 +74,22 @@ impl PianoRollApp {
                 }
             }
 
-            // 2. Find the earliest un-hit note's start time
             let blocking_time = self.song_notes.iter()
                 .filter(|n| !n.is_hit && n.channel != DRUM_CHANNEL)
                 .map(|n| n.start_time)
                 .fold(f64::INFINITY, |a, b| a.min(b));
 
-            // 3. Advance time but pause (block) if we hit an unplayed note
             if self.playback_time < blocking_time {
                 self.playback_time += dt * self.playback_speed;
                 if self.playback_time > blocking_time {
-                    self.playback_time = blocking_time; // Freeze precisely at the note
+                    self.playback_time = blocking_time; 
                 }
             }
         } else {
-            // Standard Playback
             self.playback_time += dt * self.playback_speed;
         }
     }
 
-    // Helper to check if a specific pitch is currently being played across any active melodic channel.
     fn is_pitch_active(active_pitches: &[[(u8, u8); NUM_PITCHES]; NUM_CHANNELS], pitch: u8) -> bool {
         for ch in 0..NUM_CHANNELS {
             if ch as u8 == DRUM_CHANNEL { continue; }
@@ -124,21 +122,17 @@ impl PianoRollApp {
     }
 
     pub fn update(&mut self, rx: &mpsc::Receiver<MidiMessage>) {
-        // Playback Controls
         if is_key_pressed(KeyCode::Space) { self.is_playing = !self.is_playing; }
         if is_key_pressed(KeyCode::O) { self.load_song(); }
         
-        // Seek controls
         if is_key_pressed(KeyCode::Left) { self.playback_time -= 5.0; self.sync_hits(); }
         if is_key_pressed(KeyCode::Right) { self.playback_time += 5.0; self.sync_hits(); }
 
-        // Speed controls
         if is_key_pressed(KeyCode::Up) { self.playback_speed += 0.25; }
         if is_key_pressed(KeyCode::Down) { self.playback_speed -= 0.25; }
         if is_key_pressed(KeyCode::R) { self.playback_speed *= -1.0; }
         if is_key_pressed(KeyCode::N) { self.playback_speed = 1.0; }
         
-        // Dynamic Zoom (Scroll wheel or +/- keys)
         let (_, mouse_wheel_y) = mouse_wheel();
         if mouse_wheel_y != 0.0 {
             self.note_speed_px_per_sec *= if mouse_wheel_y > 0.0 { 1.1 } else { 0.9 };
@@ -151,7 +145,6 @@ impl PianoRollApp {
         }
         self.note_speed_px_per_sec = self.note_speed_px_per_sec.clamp(50.0, 2000.0);
 
-        // View Controls
         if is_key_pressed(KeyCode::P) { self.practice_mode = !self.practice_mode; }
         if is_key_pressed(KeyCode::D) { self.show_drums = !self.show_drums; }
         if is_key_pressed(KeyCode::C) { self.show_cc = !self.show_cc; }
@@ -174,27 +167,23 @@ impl PianoRollApp {
             match msg {
                 MidiMessage::NoteOn { channel, pitch, velocity, .. } => {
                     self.live_notes.push(NoteInfo {
-                        channel,
-                        pitch,
-                        velocity,
+                        channel, pitch, velocity,
                         start_time: self.playback_time,
                         end_time: None,
                         is_hit: false,
                     });
                     
                     let state = &mut self.active_pitches[channel as usize][pitch as usize];
-                    state.0 = velocity; // update latest velocity
-                    state.1 = state.1.saturating_add(1); // increment polyphony count
+                    state.0 = velocity; 
+                    state.1 = state.1.saturating_add(1); 
                 }
                 MidiMessage::NoteOff { channel, pitch, .. } => {
                     let state = &mut self.active_pitches[channel as usize][pitch as usize];
                     state.1 = state.1.saturating_sub(1);
                     if state.1 == 0 {
-                        state.0 = 0; // Clear velocity when no keys of this pitch remain
+                        state.0 = 0; 
                     }
 
-                    // Remove .rev() to find and close the OLDEST open note first,
-                    // which prevents ghost notes if you mash the same key multiple times quickly.
                     if let Some(note) = self.live_notes
                         .iter_mut()
                         .find(|n| n.pitch == pitch && n.channel == channel && n.end_time.is_none())

@@ -1,8 +1,6 @@
 use macroquad::prelude::*;
 
 pub fn get_key_pos(pitch: u8) -> (bool, f32) {
-    if pitch < 21 || pitch > 108 { return (false, 0.0); }
-
     let notes_in_octave = [
         (false, 0.0), (true, 0.5), (false, 1.0), (true, 1.5),
         (false, 2.0), (false, 3.0), (true, 3.5), (false, 4.0),
@@ -13,10 +11,10 @@ pub fn get_key_pos(pitch: u8) -> (bool, f32) {
     let octave = (pitch / 12) as f32;
     let (is_black, rel_pos) = notes_in_octave[note_in_octave as usize];
 
+    // Return the absolute index instead of restricting to 88-keys
     let absolute_white_idx = octave * 7.0 + rel_pos;
-    let adjusted_idx = absolute_white_idx - 12.0;
 
-    (is_black, adjusted_idx)
+    (is_black, absolute_white_idx)
 }
 
 pub fn get_channel_color(channel: u8, velocity: u8, alpha: f32) -> Color {
