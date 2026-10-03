@@ -15,8 +15,10 @@ pub struct PianoRollApp {
     pub is_playing: bool,
     pub playback_speed: f64,
     pub practice_mode: bool,
+    pub note_speed_px_per_sec: f32, // Dynamic zoom variable
 
-    active_pitches: [[u8; NUM_PITCHES]; NUM_CHANNELS],
+    // Stores (velocity, count) to fix the polyphony bug
+    active_pitches: [[(u8, u8); NUM_PITCHES]; NUM_CHANNELS],
     cc_values: [[Option<(u8, f64)>; NUM_CONTROLLERS]; NUM_CHANNELS],
     
     show_drums: bool,
@@ -35,7 +37,8 @@ impl PianoRollApp {
             is_playing: false,
             playback_speed: 1.0,
             practice_mode: false,
-            active_pitches: [[0u8; NUM_PITCHES]; NUM_CHANNELS],
+            note_speed_px_per_sec: DEFAULT_NOTE_SPEED,
+            active_pitches: [[(0u8, 0u8); NUM_PITCHES]; NUM_CHANNELS],
             cc_values: [[None; NUM_CONTROLLERS]; NUM_CHANNELS],
             show_drums: true,
             show_cc: true,
@@ -64,7 +67,6 @@ impl PianoRollApp {
                     } else {
                         // Mark hit if the user is pressing the required pitch
                         if note.start_time <= self.playback_time + hit_window {
-                            // Pass the specific field instead of borrowing `self`
                             if Self::is_pitch_active(&self.active_pitches, note.pitch) {
                                 note.is_hit = true;
                             }
@@ -93,18 +95,16 @@ impl PianoRollApp {
     }
 
     // Helper to check if a specific pitch is currently being played across any active melodic channel.
-    // By not taking &self, we avoid borrow checker conflicts when iterating over mut self fields.
-    fn is_pitch_active(active_pitches: &[[u8; NUM_PITCHES]; NUM_CHANNELS], pitch: u8) -> bool {
+    fn is_pitch_active(active_pitches: &[[(u8, u8); NUM_PITCHES]; NUM_CHANNELS], pitch: u8) -> bool {
         for ch in 0..NUM_CHANNELS {
             if ch as u8 == DRUM_CHANNEL { continue; }
-            if active_pitches[ch][pitch as usize] > 0 {
+            if active_pitches[ch][pitch as usize].1 > 0 {
                 return true;
             }
         }
         false
     }
     
-    // Call this when seeking time manually so we don't instantly rubber-band
     pub fn sync_hits(&mut self) {
         for note in self.song_notes.iter_mut() {
             note.is_hit = note.start_time < self.playback_time;
@@ -117,12 +117,8 @@ impl PianoRollApp {
                 Ok(notes) => {
                     self.song_notes = notes;
                     
-                    // Find the very first note in the song (some songs have empty space at the beginning)
                     let first_note_t = self.song_notes.first().map(|n| n.start_time).unwrap_or(0.0);
-                    
-                    // Push playback_time back so the first note takes EXACTLY `LEAD_IN_SEC` to reach the keys
                     self.playback_time = first_note_t - LEAD_IN_SEC;
-                    
                     self.is_playing = true;
                 }
                 Err(e) => eprintln!("Failed to load MIDI: {}", e),
@@ -145,6 +141,19 @@ impl PianoRollApp {
         if is_key_pressed(KeyCode::R) { self.playback_speed *= -1.0; }
         if is_key_pressed(KeyCode::N) { self.playback_speed = 1.0; }
         
+        // Dynamic Zoom (Scroll wheel or +/- keys)
+        let (_, mouse_wheel_y) = mouse_wheel();
+        if mouse_wheel_y != 0.0 {
+            self.note_speed_px_per_sec *= if mouse_wheel_y > 0.0 { 1.1 } else { 0.9 };
+        }
+        if is_key_pressed(KeyCode::Equal) || is_key_pressed(KeyCode::KpAdd) {
+            self.note_speed_px_per_sec *= 1.2;
+        }
+        if is_key_pressed(KeyCode::Minus) || is_key_pressed(KeyCode::KpSubtract) {
+            self.note_speed_px_per_sec /= 1.2;
+        }
+        self.note_speed_px_per_sec = self.note_speed_px_per_sec.clamp(50.0, 2000.0);
+
         // View Controls
         if is_key_pressed(KeyCode::P) { self.practice_mode = !self.practice_mode; }
         if is_key_pressed(KeyCode::D) { self.show_drums = !self.show_drums; }
@@ -154,7 +163,7 @@ impl PianoRollApp {
         if is_key_pressed(KeyCode::Slash) { self.show_hints = !self.show_hints; }
 
         if is_key_pressed(KeyCode::Backspace) {
-            self.active_pitches = [[0u8; NUM_PITCHES]; NUM_CHANNELS];
+            self.active_pitches = [[(0u8, 0u8); NUM_PITCHES]; NUM_CHANNELS];
             for note in self.live_notes.iter_mut() {
                 if note.end_time.is_none() {
                     note.end_time = Some(self.playback_time);
@@ -176,13 +185,22 @@ impl PianoRollApp {
                         end_time: None,
                         is_hit: false,
                     });
-                    self.active_pitches[channel as usize][pitch as usize] = velocity;
+                    
+                    let state = &mut self.active_pitches[channel as usize][pitch as usize];
+                    state.0 = velocity; // update latest velocity
+                    state.1 = state.1.saturating_add(1); // increment polyphony count
                 }
                 MidiMessage::NoteOff { channel, pitch, .. } => {
-                    self.active_pitches[channel as usize][pitch as usize] = 0;
+                    let state = &mut self.active_pitches[channel as usize][pitch as usize];
+                    state.1 = state.1.saturating_sub(1);
+                    if state.1 == 0 {
+                        state.0 = 0; // Clear velocity when no keys of this pitch remain
+                    }
+
+                    // Remove .rev() to find and close the OLDEST open note first,
+                    // which prevents ghost notes if you mash the same key multiple times quickly.
                     if let Some(note) = self.live_notes
                         .iter_mut()
-                        .rev()
                         .find(|n| n.pitch == pitch && n.channel == channel && n.end_time.is_none())
                     {
                         note.end_time = Some(self.playback_time);
@@ -207,7 +225,7 @@ impl PianoRollApp {
         let screen_h = screen_height();
         self.live_notes.retain(|n| {
             if let Some(et) = n.end_time {
-                ((self.playback_time - et) * NOTE_SPEED_PX_PER_SEC as f64) < screen_h as f64
+                ((self.playback_time - et) * self.note_speed_px_per_sec as f64) < screen_h as f64
             } else {
                 true
             }
@@ -252,7 +270,7 @@ impl PianoRollApp {
                         let center_x = drum_x_start + (lane as f32 * lane_w) + (lane_w / 2.0);
                         
                         let time_until_hit = note.start_time - self.playback_time;
-                        let y = key_y - (time_until_hit * NOTE_SPEED_PX_PER_SEC as f64) as f32;
+                        let y = key_y - (time_until_hit * self.note_speed_px_per_sec as f64) as f32;
 
                         if y > screen_h || y < -50.0 { continue; }
 
@@ -290,8 +308,8 @@ impl PianoRollApp {
                 let time_until_hit = note.start_time - self.playback_time;
                 let time_until_end = end_t - self.playback_time;
 
-                let y_bottom = key_y - (time_until_hit * NOTE_SPEED_PX_PER_SEC as f64) as f32;
-                let y_top = key_y - (time_until_end * NOTE_SPEED_PX_PER_SEC as f64) as f32;
+                let y_bottom = key_y - (time_until_hit * self.note_speed_px_per_sec as f64) as f32;
+                let y_top = key_y - (time_until_end * self.note_speed_px_per_sec as f64) as f32;
 
                 let y = y_top;
                 let height = (y_bottom - y_top).max(3.0);
@@ -347,8 +365,8 @@ impl PianoRollApp {
             let max_vel = self.active_pitches[DRUM_CHANNEL as usize]
                 .iter()
                 .enumerate()
-                .filter_map(|(p, &vel)| {
-                    if vel > 0 && get_drum_lane(p as u8).map(|(_, l)| l) == Some(lane) { Some(vel) } else { None }
+                .filter_map(|(p, &(vel, count))| {
+                    if count > 0 && get_drum_lane(p as u8).map(|(_, l)| l) == Some(lane) { Some(vel) } else { None }
                 })
                 .max();
 
@@ -379,7 +397,7 @@ impl PianoRollApp {
         let time_color = if self.practice_mode { ORANGE } else if self.is_playing { GREEN } else { YELLOW };
         draw_text(&time_str, (screen_w / 2.0) - (time_size.width / 2.0), 30.0, 24.0, time_color);
 
-        let mut cc_text_y = if self.show_hints { 260.0 } else { 30.0 };
+        let mut cc_text_y = if self.show_hints { 280.0 } else { 30.0 };
         let cc_text_x = screen_w - 280.0;
 
         let ccs_active = self.cc_values.iter().any(|ch_array| ch_array.iter().any(|v| v.is_some()));
@@ -415,6 +433,7 @@ impl PianoRollApp {
                 "[P] Practice Mode: ".to_string() + if self.practice_mode { "ON" } else { "OFF" },
                 "[<] [>] Seek Time".to_string(),
                 "[^] [v] Adjust Speed".to_string(),
+                "[Scroll / + -] Zoom In/Out".to_string(),
                 "[R] Reverse Direction".to_string(),
                 "[N] Normal Speed (1.0x)".to_string(),
                 "[Backspace] Clear Notes".to_string(),
@@ -466,8 +485,8 @@ impl PianoRollApp {
     fn get_active_key_color(&self, pitch: u8) -> Option<Color> {
         for ch in 0..NUM_CHANNELS {
             if ch as u8 == DRUM_CHANNEL { continue; }
-            let vel = self.active_pitches[ch][pitch as usize];
-            if vel > 0 {
+            let (vel, count) = self.active_pitches[ch][pitch as usize];
+            if count > 0 {
                 return Some(get_channel_color(ch as u8, vel, 1.0));
             }
         }

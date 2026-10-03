@@ -3,7 +3,7 @@ pub const NUM_CHANNELS: usize = 16;
 pub const NUM_PITCHES: usize = 128;
 pub const NUM_CONTROLLERS: usize = 128;
 
-pub const NOTE_SPEED_PX_PER_SEC: f32 = 300.0;
+pub const DEFAULT_NOTE_SPEED: f32 = 300.0;
 pub const CC_HUD_TIMEOUT_SEC: f64 = 3.0;
 
 pub const LEAD_IN_SEC: f64 = 3.0;
