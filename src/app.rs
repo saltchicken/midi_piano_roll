@@ -38,7 +38,7 @@ impl PianoRollApp {
             note_speed_px_per_sec: DEFAULT_NOTE_SPEED,
             active_pitches: [[(0u8, 0u8); NUM_PITCHES]; NUM_CHANNELS],
             cc_values: [[None; NUM_CONTROLLERS]; NUM_CHANNELS],
-            show_drums: true,
+            show_drums: false,
             show_cc: true,
             show_legend: false,
             show_velocity: false,
