@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-macroquad = "0.4"
+macroquad = { version = "0.4", default-features = false }
+egui-macroquad = { version = "0.17", default-features = false }
 midir = "0.11"
 midly = "0.5"
 rfd = "0.17"

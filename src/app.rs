@@ -1,6 +1,7 @@
 use macroquad::prelude::*;
 use std::sync::mpsc;
 use rfd::FileDialog;
+use egui_macroquad::egui;
 
 use crate::constants::*;
 use crate::helpers::{get_channel_color, get_drum_lane, get_key_pos};
@@ -23,7 +24,6 @@ pub struct PianoRollApp {
     
     show_drums: bool,
     show_cc: bool,
-    show_hints: bool,
     show_legend: bool,
     show_velocity: bool,
 }
@@ -42,7 +42,6 @@ impl PianoRollApp {
             cc_values: [[None; NUM_CONTROLLERS]; NUM_CHANNELS],
             show_drums: true,
             show_cc: true,
-            show_hints: true,
             show_legend: false,
             show_velocity: false,
         }
@@ -160,7 +159,6 @@ impl PianoRollApp {
         if is_key_pressed(KeyCode::C) { self.show_cc = !self.show_cc; }
         if is_key_pressed(KeyCode::L) { self.show_legend = !self.show_legend; }
         if is_key_pressed(KeyCode::V) { self.show_velocity = !self.show_velocity; }
-        if is_key_pressed(KeyCode::Slash) { self.show_hints = !self.show_hints; }
 
         if is_key_pressed(KeyCode::Backspace) {
             self.active_pitches = [[(0u8, 0u8); NUM_PITCHES]; NUM_CHANNELS];
@@ -230,6 +228,56 @@ impl PianoRollApp {
                 true
             }
         });
+    }
+
+    pub fn ui(&mut self, ctx: &egui::Context) {
+        egui::Window::new("Controls")
+            .default_pos([20.0, 20.0])
+            .show(ctx, |ui| {
+                ui.heading("Playback");
+                
+                ui.horizontal(|ui| {
+                    if ui.button(if self.is_playing { "⏸ Pause" } else { "▶ Play" }).clicked() {
+                        self.is_playing = !self.is_playing;
+                    }
+                    if ui.button("📂 Load MIDI").clicked() {
+                        self.load_song();
+                    }
+                    if ui.button("⏹ Stop & Clear").clicked() {
+                        self.active_pitches = [[(0u8, 0u8); crate::constants::NUM_PITCHES]; crate::constants::NUM_CHANNELS];
+                        self.song_notes.clear();
+                        self.playback_time = 0.0;
+                        self.is_playing = false;
+                    }
+                });
+
+                ui.add_space(10.0);
+                
+                ui.horizontal(|ui| {
+                    ui.label("Speed:");
+                    if ui.button("⏪").clicked() { self.playback_speed -= 0.25; }
+                    if ui.button("1x").clicked() { self.playback_speed = 1.0; }
+                    if ui.button("⏩").clicked() { self.playback_speed += 0.25; }
+                    if ui.button("Reverse").clicked() { self.playback_speed *= -1.0; }
+                });
+                
+                ui.label(format!("Current Speed: {:.2}x", self.playback_speed));
+                ui.label(format!("Time: {:.1}s", self.playback_time));
+
+                ui.add_space(15.0);
+                ui.heading("Settings");
+                
+                // Directly bind egui checkboxes to your app's state variables
+                ui.checkbox(&mut self.practice_mode, "Practice Mode");
+                ui.checkbox(&mut self.show_drums, "Show Drum Highway");
+                ui.checkbox(&mut self.show_cc, "Show CC Monitor");
+                ui.checkbox(&mut self.show_legend, "Show Channel Legend");
+                ui.checkbox(&mut self.show_velocity, "Show Velocity Numbers");
+                
+                ui.add_space(10.0);
+                ui.label("Zoom (Note Speed)");
+                ui.add(egui::Slider::new(&mut self.note_speed_px_per_sec, 50.0..=2000.0));
+            });
     }
 
     pub fn draw(&self) {
@@ -397,7 +445,7 @@ impl PianoRollApp {
         let time_color = if self.practice_mode { ORANGE } else if self.is_playing { GREEN } else { YELLOW };
         draw_text(&time_str, (screen_w / 2.0) - (time_size.width / 2.0), 30.0, 24.0, time_color);
 
-        let mut cc_text_y = if self.show_hints { 280.0 } else { 30.0 };
+        let mut cc_text_y = 30.0;
         let cc_text_x = screen_w - 280.0;
 
         let ccs_active = self.cc_values.iter().any(|ch_array| ch_array.iter().any(|v| v.is_some()));
@@ -422,34 +470,6 @@ impl PianoRollApp {
                         cc_text_y += 20.0;
                     }
                 }
-            }
-        }
-
-        if self.show_hints {
-            let hints = [
-                "[?] Toggle Hints".to_string(),
-                "[O] Load MIDI File".to_string(),
-                "[Space] Play/Pause Song".to_string(),
-                "[P] Practice Mode: ".to_string() + if self.practice_mode { "ON" } else { "OFF" },
-                "[<] [>] Seek Time".to_string(),
-                "[^] [v] Adjust Speed".to_string(),
-                "[Scroll / + -] Zoom In/Out".to_string(),
-                "[R] Reverse Direction".to_string(),
-                "[N] Normal Speed (1.0x)".to_string(),
-                "[Backspace] Clear Notes".to_string(),
-                format!("[D] Drums: {}", if self.show_drums { "ON" } else { "OFF" }),
-                format!("[C] CC Monitor: {}", if self.show_cc { "ON" } else { "OFF" }),
-                format!("[L] Legend: {}", if self.show_legend { "ON" } else { "OFF" }),
-                format!("[V] Velocity: {}", if self.show_velocity { "ON" } else { "OFF" })
-            ];
-
-            let max_w = hints.iter().map(|h| measure_text(h, None, 20, 1.0).width).fold(0.0, f32::max);
-            let hints_x = screen_w - max_w - 15.0;
-            let mut hints_y = 30.0;
-
-            for hint in hints {
-                draw_text(&hint, hints_x, hints_y, 20.0, WHITE);
-                hints_y += 25.0;
             }
         }
 

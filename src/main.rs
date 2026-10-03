@@ -1,5 +1,3 @@
-// src/main.rs
-
 mod app;
 mod constants;
 mod helpers;
@@ -33,6 +31,11 @@ async fn main() {
 
         app.update(&rx);
         app.draw(); 
+
+        egui_macroquad::ui(|egui_ctx| {
+            app.ui(egui_ctx);
+        });
+        egui_macroquad::draw();
 
         next_frame().await
     }
